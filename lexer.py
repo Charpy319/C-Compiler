@@ -22,9 +22,12 @@ class TokenType(Enum):
     RETURN = auto()
     ID = auto()
     INT_LITERAL = auto()
-    NEGATION = auto()
     BITWISE_COMPLEMENT = auto()
     LOGICAL_NEGATION = auto()
+    SUBTRACTION = auto()
+    ADDITION = auto()
+    DIVISION = auto()
+    MULTIPLICATION = auto()
 
 # Token dataclass defines what is in each token, like a struct in C
 @dataclass
@@ -51,9 +54,12 @@ class Lexer:
             (TokenType.SEMICOLON, r';'),
             (TokenType.ID, r'[a-zA-Z_][a-zA-Z0-9_]*'),
             (TokenType.INT_LITERAL, r'[0-9]+'),
-            (TokenType.NEGATION, r'-'),
             (TokenType.BITWISE_COMPLEMENT, r'~'),
-            (TokenType.LOGICAL_NEGATION, r'!')
+            (TokenType.LOGICAL_NEGATION, r'!'),
+            (TokenType.SUBTRACTION, r'-'),
+            (TokenType.ADDITION, r'[+]'),
+            (TokenType.DIVISION, r'[/]'),
+            (TokenType.MULTIPLICATION, r'[*]'),
             ]
         # A dict is used here to differentiate keywords from ID 
         self.keywords = {

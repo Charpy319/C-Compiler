@@ -8,7 +8,6 @@ Program -> Function(main) -> Return -> Value
 Different dataclasses will be used to establish the relationship between each node type.
 """
 from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Optional, Union
 from lexer import Token, TokenType
 
@@ -22,8 +21,24 @@ class UnOp:
     operator: str
     operand: 'Exp'
 
- # Union means that Exp can be of any of the types in the []
-Exp = Union[IntLiteral, UnOp]
+@dataclass
+class AddSub:
+    operator: str
+    operand1: 'Exp'
+    operand2: 'Exp'
+
+@dataclass
+class MultDiv:
+    operator: str
+    operand1: 'Exp'
+    operand2: 'Exp'
+
+@dataclass
+class Parenthesis:
+    exp: 'Exp'
+
+# Union means that it can be of any of the types in the []
+Exp = Union[AddSub, MultDiv, Parenthesis, UnOp, IntLiteral]
 
 @dataclass
 class Statement:
@@ -54,20 +69,46 @@ class Parser:
                 return tok
         raise SyntaxError(f"Expected {expected_type}, got '{tok.value}' {tok.type} on line {tok.line}")
     
-    # Builds AST from the program node down to Exp
-    def parse_exp(self) -> Exp:
+    # Builds AST from the program node down
+    def parse_fact(self) -> Exp:
         tok = self.check_type(
-            TokenType.INT_LITERAL, 
-            TokenType.NEGATION, 
+            TokenType.OPEN_PARENTHESIS,
+            TokenType.INT_LITERAL,
+            TokenType.SUBTRACTION, 
             TokenType.BITWISE_COMPLEMENT, 
             TokenType.LOGICAL_NEGATION
-            )
-
-        if tok.type == TokenType.INT_LITERAL:
+        )
+        if tok.type == TokenType.OPEN_PARENTHESIS:
+            tok = self.parse_exp()
+            self.check_type(TokenType.CLOSE_PARENTHESIS)
+            return Parenthesis(exp=tok)
+        
+        elif tok.type == TokenType.INT_LITERAL:
             return IntLiteral(value=int(tok.value))
+        
         else:
             inner_exp = self.parse_exp()
             return UnOp(operator=tok.value, operand=inner_exp)
+
+    def parse_term(self) -> Exp:
+        fact = self.parse_fact()
+        next = self.peek()
+        while next.type == TokenType.MULTIPLICATION or next.type == TokenType.DIVISION:
+            op = self.check_type(TokenType.MULTIPLICATION, TokenType.DIVISION)
+            next_fact = self.parse_fact()
+            fact = MultDiv(operator=op.value, operand1=fact, operand2=next_fact)
+            next = self.peek()
+        return fact
+
+    def parse_exp(self) -> Exp:
+        term = self.parse_term()
+        next = self.peek()
+        while next.type == TokenType.ADDITION or next.type == TokenType.SUBTRACTION:
+            op = self.check_type(TokenType.ADDITION, TokenType.SUBTRACTION)
+            next_term = self.parse_term()
+            term = AddSub(operator=op.value, operand1=term, operand2=next_term)
+            next = self.peek()
+        return term
     
     def parse_statement(self) -> Statement:
         self.check_type(TokenType.RETURN)

@@ -1,14 +1,31 @@
 import sys
 from dataclasses import dataclass
 from lexer import Lexer
-from parser import Parser, Program, Function, Statement, Exp, UnOp, IntLiteral
+from parser import Parser, Program, Function, Statement, Exp, UnOp, IntLiteral, AddSub, MultDiv, Parenthesis
 
 class PrettyPrinter:
     def __init__(self, ast: Program):
         self.ast = ast
 
     def print_exp(self, exp: Exp) -> str:
-        if isinstance(exp, UnOp):
+        if isinstance(exp, AddSub):
+            op = exp.operator
+            if op == "+":
+                return f"{self.print_exp(exp.operand1)}+{self.print_exp(exp.operand2)}"
+            elif op == "-":
+                return f"{self.print_exp(exp.operand1)}-{self.print_exp(exp.operand2)}"
+            
+        elif isinstance(exp, MultDiv):
+            op = exp.operator
+            if op == "*":
+                return f"{self.print_exp(exp.operand1)}*{self.print_exp(exp.operand2)}"
+            elif op == "/":
+                return f"{self.print_exp(exp.operand1)}/{self.print_exp(exp.operand2)}"
+        
+        elif isinstance(exp, Parenthesis):
+            return f"({self.print_exp(exp.exp)})"
+            
+        elif isinstance(exp, UnOp):
             op = exp.operator
             if op == "~":
                 return f"~{self.print_exp(exp.operand)}"
@@ -16,9 +33,10 @@ class PrettyPrinter:
                 return f"-{self.print_exp(exp.operand)}"
             elif op == "!":
                 return f"!{self.print_exp(exp.operand)}"
+            
         elif isinstance(exp, IntLiteral):
-            # Return the value directly for IntLiteral
             return str(exp.value)
+        
         raise TypeError(f"Unknown expression type: {type(exp)}")
     
     def print_statement(self, stm: Statement) -> str:
@@ -51,3 +69,4 @@ pretty = PrettyPrinter(ast)
 tree = pretty.print_program()
 
 print(tree)
+print(ast)
