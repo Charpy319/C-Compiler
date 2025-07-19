@@ -1,31 +1,25 @@
 import sys
 from dataclasses import dataclass
 from lexer import Lexer
-from parser import Parser
-
-@dataclass
-class Exp:
-    value: int
-
-@dataclass
-class Statement:
-    expression: Exp
-
-@dataclass
-class Function:
-    name: str
-    body: Statement
-
-@dataclass
-class Program:
-    function: Function
+from parser import Parser, Program, Function, Statement, Exp, UnOp, IntLiteral
 
 class PrettyPrinter:
     def __init__(self, ast: Program):
         self.ast = ast
 
     def print_exp(self, exp: Exp) -> str:
-        return str(exp.value)
+        if isinstance(exp, UnOp):
+            op = exp.operator
+            if op == "~":
+                return f"~{self.print_exp(exp.operand)}"
+            elif op == "-":
+                return f"-{self.print_exp(exp.operand)}"
+            elif op == "!":
+                return f"!{self.print_exp(exp.operand)}"
+        elif isinstance(exp, IntLiteral):
+            # Return the value directly for IntLiteral
+            return str(exp.value)
+        raise TypeError(f"Unknown expression type: {type(exp)}")
     
     def print_statement(self, stm: Statement) -> str:
         return (

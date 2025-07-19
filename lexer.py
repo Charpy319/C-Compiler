@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum, auto
 
+# TokenType class stores all the available token types
 class TokenType(Enum):
     OPEN_BRACE = auto()
     CLOSE_BRACE = auto()
@@ -21,7 +22,11 @@ class TokenType(Enum):
     RETURN = auto()
     ID = auto()
     INT_LITERAL = auto()
+    NEGATION = auto()
+    BITWISE_COMPLEMENT = auto()
+    LOGICAL_NEGATION = auto()
 
+# Token dataclass defines what is in each token, like a struct in C
 @dataclass
 class Token:
     type: TokenType
@@ -35,6 +40,7 @@ class Lexer:
     def __init__(self, text: str):
         self.text = text
         self.line = 1
+        # Token specification contains each token type and the pattern corresponding to it
         self.token_specification = [
             (TokenType.OPEN_BRACE, r'{'),
             (TokenType.CLOSE_BRACE, r'}'),
@@ -44,8 +50,12 @@ class Lexer:
             (TokenType.NEWLINE, r'\n'),
             (TokenType.SEMICOLON, r';'),
             (TokenType.ID, r'[a-zA-Z_][a-zA-Z0-9_]*'),
-            (TokenType.INT_LITERAL, r'[0-9]+')
+            (TokenType.INT_LITERAL, r'[0-9]+'),
+            (TokenType.NEGATION, r'-'),
+            (TokenType.BITWISE_COMPLEMENT, r'~'),
+            (TokenType.LOGICAL_NEGATION, r'!')
             ]
+        # A dict is used here to differentiate keywords from ID 
         self.keywords = {
             "int": TokenType.INT,
             "return": TokenType.RETURN
@@ -53,11 +63,17 @@ class Lexer:
         self.tokens = []
 
     def tokenise(self) -> list:
+        # Make a string of all the patterns in the specification
         pattern = "|".join(f'(?P<{tok_type.name}>{regex})' for tok_type, regex in self.token_specification)
         master_pattern = re.compile(pattern)
 
+        # finditer goes through text and finds any matches
         for match in master_pattern.finditer(self.text):
+
+            # match.group() gives the string that was matched
             value = match.group()
+
+            # match.lastgroup gives the type that was matched as a string and TokenType[] turns it back into an Enum (not string)
             type = TokenType[match.lastgroup]
             if type == TokenType.ID and value in self.keywords:
                 type = self.keywords[value]

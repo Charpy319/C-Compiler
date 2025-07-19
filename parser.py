@@ -9,29 +9,21 @@ Different dataclasses will be used to establish the relationship between each no
 """
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Optional, Union
+from lexer import Token, TokenType
 
-class TokenType(Enum):
-    OPEN_BRACE = auto()
-    CLOSE_BRACE = auto()
-    OPEN_PARENTHESIS = auto()
-    CLOSE_PARENTHESIS = auto()
-    WHITESPACE = auto()
-    NEWLINE = auto()
-    SEMICOLON = auto()
-    INT = auto()
-    RETURN = auto()
-    ID = auto()
-    INT_LITERAL = auto()
-
+# The dataclasses below represent the different types of nodes of the AST
 @dataclass
-class Token:
-    type: TokenType
-    value: str
-    line: int
-
-@dataclass
-class Exp:
+class IntLiteral:
     value: int
+
+@dataclass
+class UnOp:
+    operator: str
+    operand: 'Exp'
+
+ # Union means that Exp can be of any of the types in the []
+Exp = Union[IntLiteral, UnOp]
 
 @dataclass
 class Statement:
@@ -51,36 +43,47 @@ class Parser:
         self.tokens = tokens
         self.pos = 0
     
-    def peek(self) -> str:
+    def peek(self) -> Optional[Token]:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
     
-    def check_type(self, expected_type: TokenType) -> str:
-        tok = self.peek()
-        if tok.type.name == expected_type:
-            self.pos += 1
-            return tok.value
-        else:
-            raise SyntaxError(f"Expected {expected_type}, got {tok.type.name}")
-        
+    def check_type(self, *expected_type: TokenType) -> Token:
+        for e in expected_type:
+            tok = self.peek()
+            if tok.type == e:
+                self.pos += 1
+                return tok
+        raise SyntaxError(f"Expected {expected_type}, got '{tok.value}' {tok.type} on line {tok.line}")
+    
+    # Builds AST from the program node down to Exp
     def parse_exp(self) -> Exp:
-        tok = self.check_type(TokenType.INT_LITERAL.name)
-        return Exp(value=int(tok))
+        tok = self.check_type(
+            TokenType.INT_LITERAL, 
+            TokenType.NEGATION, 
+            TokenType.BITWISE_COMPLEMENT, 
+            TokenType.LOGICAL_NEGATION
+            )
+
+        if tok.type == TokenType.INT_LITERAL:
+            return IntLiteral(value=int(tok.value))
+        else:
+            inner_exp = self.parse_exp()
+            return UnOp(operator=tok.value, operand=inner_exp)
     
     def parse_statement(self) -> Statement:
-        self.check_type(TokenType.RETURN.name)
-        tok = self.parse_exp()
-        self.check_type(TokenType.SEMICOLON.name)
-        return Statement(expression=tok)
+        self.check_type(TokenType.RETURN)
+        exp = self.parse_exp()
+        self.check_type(TokenType.SEMICOLON)
+        return Statement(expression=exp)
     
     def parse_function(self) -> Function:
-        self.check_type(TokenType.INT.name)
-        name = self.check_type(TokenType.ID.name)
-        self.check_type(TokenType.OPEN_PARENTHESIS.name)
-        self.check_type(TokenType.CLOSE_PARENTHESIS.name)
-        self.check_type(TokenType.OPEN_BRACE.name)
+        self.check_type(TokenType.INT)
+        name = self.check_type(TokenType.ID)
+        self.check_type(TokenType.OPEN_PARENTHESIS)
+        self.check_type(TokenType.CLOSE_PARENTHESIS)
+        self.check_type(TokenType.OPEN_BRACE)
         body = self.parse_statement()
-        self.check_type(TokenType.CLOSE_BRACE.name)
-        return Function(name=name, body=body)
+        self.check_type(TokenType.CLOSE_BRACE)
+        return Function(name=name.value, body=body)
     
     def parse_program(self) -> Program:
         func = self.parse_function()
