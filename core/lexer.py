@@ -6,38 +6,7 @@ Types can be stores in an enum class which basically numbers each type to make t
 The tokens are stored in a dataclass.
 """
 import re
-from dataclasses import dataclass
-from enum import Enum, auto
-
-# TokenType class stores all the available token types
-class TokenType(Enum):
-    OPEN_BRACE = auto()
-    CLOSE_BRACE = auto()
-    OPEN_PARENTHESIS = auto()
-    CLOSE_PARENTHESIS = auto()
-    WHITESPACE = auto()
-    NEWLINE = auto()
-    SEMICOLON = auto()
-    INT = auto()
-    RETURN = auto()
-    ID = auto()
-    INT_LITERAL = auto()
-    BITWISE_COMPLEMENT = auto()
-    LOGICAL_NEGATION = auto()
-    SUBTRACTION = auto()
-    ADDITION = auto()
-    DIVISION = auto()
-    MULTIPLICATION = auto()
-
-# Token dataclass defines what is in each token, like a struct in C
-@dataclass
-class Token:
-    type: TokenType
-    value: str
-    line: int
-
-with open("return.c", "r") as file:
-    text = file.read()
+from core.data.token_types import *
 
 class Lexer:
     def __init__(self, text: str):
@@ -54,7 +23,21 @@ class Lexer:
             (TokenType.SEMICOLON, r';'),
             (TokenType.ID, r'[a-zA-Z_][a-zA-Z0-9_]*'),
             (TokenType.INT_LITERAL, r'[0-9]+'),
-            (TokenType.BITWISE_COMPLEMENT, r'~'),
+            (TokenType.BIT_COMP, r'~'),
+            (TokenType.BIT_SHIFT_LEFT, r'<<'),
+            (TokenType.BIT_SHIFT_RIGHT, r'>>'),
+            (TokenType.AND, r'&&'),
+            (TokenType.OR, r'\|\|'),
+            (TokenType.BIT_OR, r'\|'),
+            (TokenType.BIT_XOR, r'^'),
+            (TokenType.BIT_AND, r'&'),
+            (TokenType.MODULO, r'%'),
+            (TokenType.EQUAL, r'=='),
+            (TokenType.NOT_EQUAL, r'!='),
+            (TokenType.LESS_THAN_OR_EQUAL, r'<='),
+            (TokenType.LESS_THAN, r'<'),
+            (TokenType.GREATER_THAN_OR_EQUAL, r'>='),
+            (TokenType.GREATER_THAN, r'>'),
             (TokenType.LOGICAL_NEGATION, r'!'),
             (TokenType.SUBTRACTION, r'-'),
             (TokenType.ADDITION, r'[+]'),
