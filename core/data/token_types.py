@@ -15,6 +15,19 @@ class TokenType(Enum):
     ID = auto()
     INT_LITERAL = auto()
     BIT_COMP = auto()
+    ASSIGN_ADD = auto()
+    ASSIGN_SUB = auto()
+    ASSIGN_MULT = auto()
+    ASSIGN_DIV = auto()
+    ASSIGN_MOD = auto()
+    ASSIGN_LEFT_SHIFT = auto()
+    ASSIGN_RIGHT_SHIFT = auto()
+    ASSIGN_BIT_AND = auto()
+    ASSIGN_BIT_OR = auto()
+    ASSIGN_BIT_XOR = auto()
+    INCREMENT = auto()
+    DECREMENT = auto()
+    COMMA = auto()
     BIT_SHIFT_LEFT = auto()
     BIT_SHIFT_RIGHT = auto()
     AND = auto()
@@ -34,6 +47,7 @@ class TokenType(Enum):
     ADDITION = auto()
     DIVISION = auto()
     MULTIPLICATION = auto()
+    ASSIGNMENT = auto()
 
 # Token dataclass defines what is in each token, like a struct in C
 @dataclass
