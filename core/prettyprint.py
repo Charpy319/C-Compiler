@@ -64,7 +64,7 @@ class PrettyPrinter:
             return self.print_exp(stm.exp)
     
     def print_function(self, func: Function) -> str:
-            fun = f"FUN INT {func.name}:\n    params: ()\n    body:\n"
+            fun = f"FUNC INT {func.name}:\n    params: ()\n    body:\n"
             for s in func.body: 
                 fun += f"           {self.print_statement(s)}\n"
             return fun

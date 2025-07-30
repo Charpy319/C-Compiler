@@ -1,128 +1,171 @@
 from dataclasses import dataclass
 from typing import Optional, Union
+from core.util.symbol_table import SymbolTable
+from core.data.token_types import TokenType
 
 # The dataclasses below represent the different types of nodes of the AST
-@dataclass
-class Parenthesis:
-    exp: 'Exp'
 
 @dataclass
-class Var:
-    id: str
-    type: str
+class Program:
+    functions: list['Function']
 
 @dataclass
-class Increment:
-    id: str
-    prefix: bool
+class Function:
+    name: str
+    variables: list[(str, str)]
+    _return: TokenType
+    body: 'Block'
 
 @dataclass
-class Decrement:
-    id: str
-    prefix: bool
+class Block:
+    block_items: list['BlockItem']
+    symboltable: SymbolTable
 
 @dataclass
-class IntLiteral:
-    value: int
+class If:
+    condition: 'Exp'
+    if_statement: 'Statement'
+    else_statement: Optional['Statement'] = None
 
 @dataclass
-class UnOp:
-    operator: str
-    operand: 'Exp'
+class ExpStatement:
+    line: int
+    exp: Optional['Exp'] = None
+@dataclass
+class Declare:
+    id: 'Var'
+    type: TokenType
+    exp: Optional['Exp']
+    line: int
 
 @dataclass
-class MultDivMod:
-    operator: str
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class AddSub:
-    operator: str
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class BitShift:
-    operator: str
-    value: 'Exp'
-    shift: 'Exp'
-
-@dataclass
-class BitAND:
-    operator = "&"
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class BitXOR:
-    operator = "^"
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class BitOR:
-    operator = "|"
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class Inequality:
-    operator: str
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class Equality:
-    operator: str
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class AND:
-    operator = "&&"
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class OR:
-    operator = "||"
-    operand1: 'Exp'
-    operand2: 'Exp'
-
-@dataclass
-class Assign:
-    id: Var
-    type: str
-    exp: 'Exp'
+class Return:
+    line: int
+    exp: Optional['Exp'] = None
 
 @dataclass
 class CommaExp:
     lhs: 'Exp'
     rhs: 'Exp'
+    line: int
 
 @dataclass
-class Return:
+class Assign:
+    id: 'Var'
     exp: 'Exp'
+    line: int
+    type: Optional[TokenType] = None
+
+@dataclass 
+class Conditional:
+    condition: 'Exp'
+    if_statement: 'Exp'
+    else_statement: 'Exp'
 
 @dataclass
-class Declare:
-    id: Var
-    type: str
-    exp: Optional['Exp']
+class OR:
+    operator = TokenType.OR
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
 
 @dataclass
-class ExpStatement:
+class AND:
+    operator = TokenType.AND
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class Equality:
+    operator: TokenType
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class Inequality:
+    operator: TokenType
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class BitOR:
+    operator = TokenType.BIT_OR
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class BitXOR:
+    operator = TokenType.BIT_XOR
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class BitAND:
+    operator = TokenType.BIT_AND
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class BitShift:
+    operator: TokenType
+    value: 'Exp'
+    shift: 'Exp'
+    line: int
+
+@dataclass
+class AddSub:
+    operator: TokenType
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+
+@dataclass
+class MultDivMod:
+    operator: TokenType
+    operand1: 'Exp'
+    operand2: 'Exp'
+    line: int
+
+@dataclass
+class UnOp:
+    operator: TokenType
+    operand: 'Exp'
+    line: int
+
+@dataclass
+class IntLiteral:
+    value: int
+    line: int
+
+@dataclass
+class Decrement:
+    id: str
+    prefix: bool
+    line: int
+
+@dataclass
+class Increment:
+    id: str
+    prefix: bool
+    line: int
+
+@dataclass
+class Var:
+    id: str
+    line: int
+    type: Optional[TokenType] = None
+
+@dataclass
+class Parenthesis:
     exp: 'Exp'
-
-@dataclass
-class Function:
-    name: str
-    body: list['Statement']
-
-@dataclass
-class Program:
-    function: Function
+    line: int
 
 
 
@@ -136,4 +179,6 @@ Exp = Union[
     UnOp, IntLiteral, Var, Parenthesis
     ]
 
-Statement = Union[Return, Declare, Exp]
+Statement = Union[Return, Declare, Exp, Block]
+
+BlockItem = Union[Statement, Declare]

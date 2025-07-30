@@ -6,12 +6,18 @@ To read more about each function and their relationships, refer to the parser do
 from typing import Optional
 from core.data.token_types import *
 from core.data.nodes import *
-from core.util.symbol_table import symbol, SymbolEntry
+from core.util.symbol_table import SymbolTable, SymbolEntry
+from core.util.error import error
 
 class Parser:
     def __init__(self, tokens: list):
         self.tokens = tokens
         self.pos = 0
+        self.table_stack = []
+        self.keywords = {
+            TokenType.INT, TokenType.FLOAT,
+            TokenType.CHAR, TokenType.VOID
+        }
     
     # Returns the next token to be parsed
     def peek(self) -> Optional[Token]:
@@ -24,9 +30,297 @@ class Parser:
             if tok.type == e:
                 self.pos += 1
                 return tok
-        raise SyntaxError(f"Expected {expected_type}, got '{tok.value}' {tok.type} on line {tok.line}")
+        error.report(error_msg=f"Expected {expected_type}, got '{tok.value}'", line=tok.line, type="SyntaxError")
     
     # Builds AST from the program node down
+    def parse_program(self) -> Program:
+        functions = []
+        while self.pos < len(self.tokens):
+            func = self.parse_function()
+            functions.append(func)
+        return Program(functions=functions)
+
+    def parse_function(self) -> Function:
+        return_type = self.consume(
+            TokenType.INT, TokenType.FLOAT,
+            TokenType.CHAR, TokenType.VOID
+            )
+        name = self.consume(TokenType.ID)
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        args = []
+        while self.peek().type in self.keywords:
+            arg_name = None
+            type = self.consume(
+                TokenType.INT, TokenType.FLOAT,
+                TokenType.CHAR, TokenType.VOID
+                )
+            if self.peek().type == TokenType.ID:
+                arg_name = self.consume(TokenType.ID)
+            args.append((type.type, arg_name.value) if arg_name else (type.type, None))
+            if self.peek().type == TokenType.COMMA:
+                self.consume()
+                if self.peek().type not in self.keywords:
+                    error.report(error_msg=f"Misplaced comma in function {name.value}", line=name.line, type="SyntaxError")
+
+        if not args: args.append((TokenType.VOID, None))
+        symbol = SymbolTable(fun_name=name.value, args=args, return_type=return_type.type)
+        self.consume(TokenType.CLOSE_PARENTHESIS)
+
+        # TODO: add in compatibility for multiple functions
+        """if self.peek().type != TokenType.OPEN_BRACE and name.value != "main":
+            self.consume(TokenType.SEMICOLON)
+            return Function(
+            name=name.value, variables=args,
+            _return=return_type.type, body=statements, symboltable=symbol
+            )"""
+        block = self.parse_block(symbol)
+        return Function(
+            name=name.value, variables=args,
+            _return=return_type.type, body=block
+            )
+
+    def parse_block(self, func_table: SymbolTable = None) -> BlockItem:
+        if not func_table:
+            func_table = SymbolTable()
+        self.table_stack.append(func_table)
+        blk_itms = []
+        self.consume(TokenType.OPEN_BRACE)
+        while self.peek().type != TokenType.CLOSE_BRACE:
+            if self.peek().type in self.keywords:
+                blk_itms.append(self.parse_declare())
+            elif self.peek().type == TokenType.OPEN_BRACE:
+                blk_itms.append(self.parse_block())
+            else:
+                blk_itms.append(self.parse_statement())
+            self.consume(TokenType.SEMICOLON)
+
+        self.consume(TokenType.CLOSE_BRACE)
+        self.table_stack.pop()
+        return Block(block_items=blk_itms, symboltable=func_table)
+        
+
+    def parse_statement(self) -> Statement:
+        if self.peek().type == TokenType.RETURN:
+            return self.parse_return()
+        elif self.peek().type == TokenType.IF:
+            return self.parse_if()
+        elif self.peek().type == TokenType.SEMICOLON:
+            null_stm = self.consume(TokenType.SEMICOLON)
+            return ExpStatement(line=null_stm.line)
+        else:
+            exp = self.parse_assignment()
+            return ExpStatement(line=exp.line, exp=exp)
+        
+
+    # TODO: add in compatibility for calling functions
+
+    def parse_declare(self) -> Declare:
+        symbol = self.table_stack[-1]
+        type = self.consume(
+                TokenType.INT, TokenType.FLOAT,
+                TokenType.CHAR, TokenType.VOID
+                )
+        id = self.consume(TokenType.ID)
+        val = None
+        next = self.peek()
+        if next.type == TokenType.ASSIGNMENT:
+            self.consume(TokenType.ASSIGNMENT)
+            val = self.parse_assignment()
+        entry = SymbolEntry(id=id.value, type=type.type, initialised=True)
+        variable = Var(id=id.value, type=type.type, line=id.line)
+        symbol.insert(id.value, entry)
+        return Declare(id=variable, type=type.type, exp=val, line=id.line)
+
+    def parse_return(self) -> Statement:
+        ret = self.consume(TokenType.RETURN)
+        if self.peek().type == TokenType.SEMICOLON:
+            return Return(line=ret.line)
+        else:
+            exp = self.parse_assignment()
+            return Return(exp=exp, line=ret.line)
+        
+    def parse_if(self):
+        self.consume(TokenType.IF)
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        cond = self.parse_assignment()
+        self.consume(TokenType.CLOSE_PARENTHESIS)
+        if self.peek().type == TokenType.OPEN_BRACE:
+            if_stm = self.parse_block()
+        else:
+            if_stm = self.parse_statement()
+        
+        if self.peek().type != TokenType.ELSE:
+            return If(condition=cond, if_statement=if_stm)
+        self.consume(TokenType.ELSE)
+        if self.peek().type == TokenType.IF:
+            else_stm = self.parse_if()
+        elif self.peek().type == TokenType.OPEN_BRACE:
+            else_stm = self.parse_block()
+        else:
+            else_stm = self.parse_statement()
+        return If(condition=cond, if_statement=if_stm, else_statement=else_stm)
+    
+    def parse_comma_exp(self) -> Exp:
+        exp = self.parse_assignment()
+        while self.peek().type == TokenType.COMMA:
+            self.consume(TokenType.COMMA)
+            rhs_exp = self.parse_assignment()
+            exp = CommaExp(lhs=exp, rhs=rhs_exp, line=exp.line)       
+        return exp
+
+    def parse_assignment(self) -> Exp:
+        if self.peek().type != TokenType.ID:
+            return self.parse_conditional()
+        
+        self.pos += 1
+        if self.peek().type not in (
+            TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
+            TokenType.ASSIGN_MULT, TokenType.ASSIGN_DIV, TokenType.ASSIGN_MOD,
+            TokenType.ASSIGN_BIT_AND, TokenType.ASSIGN_BIT_OR, TokenType.ASSIGN_BIT_XOR,
+            TokenType.ASSIGN_LEFT_SHIFT, TokenType.ASSIGN_RIGHT_SHIFT
+            ):
+            self.pos -= 1
+            return self.parse_conditional()
+        self.pos -= 1
+        var = self.consume(TokenType.ID)
+
+        operation = self.consume(
+            TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
+            TokenType.ASSIGN_MULT, TokenType.ASSIGN_DIV, TokenType.ASSIGN_MOD,
+            TokenType.ASSIGN_BIT_AND, TokenType.ASSIGN_BIT_OR, TokenType.ASSIGN_BIT_XOR,
+            TokenType.ASSIGN_LEFT_SHIFT, TokenType.ASSIGN_RIGHT_SHIFT
+            )
+        if self.peek().type == TokenType.ID:
+            assign = self.parse_assignment()
+            if isinstance(assign, Assign):
+                assign = assign.id  # Assign.id is a Var
+        else:
+            assign = self.parse_conditional()
+
+        variable = Var(id=var.value, line=var.line)
+
+        if operation.type == TokenType.ASSIGN_ADD:
+            assign = AddSub(operator=TokenType.ADDITION, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_SUB:
+            assign = AddSub(operator=TokenType.SUBTRACTION, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_MULT:
+            assign = MultDivMod(operator=TokenType.MULTIPLICATION, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_DIV:
+            assign = MultDivMod(operator=TokenType.DIVISION, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_MOD:
+            assign = MultDivMod(operator=TokenType.MODULO, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_BIT_AND:
+            assign = BitAND(operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_BIT_OR:
+            assign = BitOR(operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_BIT_OR:
+            assigne = BitXOR(operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_RIGHT_SHIFT:
+            assign = BitShift(operator=TokenType.BIT_SHIFT_RIGHT, operand1=variable, operand2=assign, line=var.line)
+        elif operation.type == TokenType.ASSIGN_LEFT_SHIFT:
+            assign = BitShift(operator=TokenType.BIT_SHIFT_LEFT, operand1=variable, operand2=assign, line=var.line)
+
+        return Assign(id=variable, exp=assign, line=var.line)
+
+    def parse_conditional(self) -> Exp:
+        cond = self.parse_or()
+        if self.peek().type != TokenType.QUESTION_MARK:
+            return cond
+        self.consume(TokenType.QUESTION_MARK)
+        if_stm = self.parse_assignment()
+        self.consume(TokenType.COLON)
+        else_stm = self.parse_conditional()
+        return Conditional(condition=cond, if_statement=if_stm, else_statement=else_stm)
+
+    def parse_or(self) -> Exp:
+        exp = self.parse_and()
+        while self.peek().type == TokenType.OR:
+            self.pos += 1
+            next_exp = self.parse_and()
+            exp = OR(operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+    
+    def parse_and(self) -> Exp:
+        exp = self.parse_equality()
+        while self.peek().type == TokenType.AND:
+            self.pos += 1
+            next_exp = self.parse_equality()
+            exp = AND(operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+
+    def parse_equality(self) -> Exp:
+        exp = self.parse_inequality()
+        while self.peek().type == TokenType.EQUAL or self.peek().type == TokenType.NOT_EQUAL:
+            op = self.consume(TokenType.EQUAL, TokenType.NOT_EQUAL)
+            next_exp = self.parse_inequality()
+            exp = Equality(operator=op.type, operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+
+    def parse_inequality(self) -> Exp:
+        exp = self.parse_bit_or()
+        while (self.peek().type == TokenType.LESS_THAN or self.peek().type == TokenType.LESS_THAN_OR_EQUAL
+        or self.peek().type == TokenType.GREATER_THAN or self.peek().type == TokenType.GREATER_THAN_OR_EQUAL):
+            op = self.consume(
+                TokenType.LESS_THAN, TokenType.LESS_THAN_OR_EQUAL,
+                TokenType.GREATER_THAN, TokenType.GREATER_THAN_OR_EQUAL
+                )
+            next_exp = self.parse_bit_or()
+            exp = Inequality(operator=op.type, operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+
+    def parse_bit_or(self) -> Exp:
+        exp = self.parse_bit_xor()
+        while self.peek().type == TokenType.BIT_OR:
+            self.pos += 1
+            next_exp = self.parse_bit_xor()
+            exp = BitOR(operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+
+    def parse_bit_xor(self) -> Exp:
+        exp = self.parse_bit_and()
+        while self.peek().type == TokenType.BIT_XOR:
+            self.pos += 1
+            next_exp = self.parse_bit_and()
+            exp = BitXOR(operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+    
+    def parse_bit_and(self) -> Exp:
+        exp = self.parse_bit_shift()
+        while self.peek().type == TokenType.BIT_AND:
+            self.pos += 1
+            next_exp = self.parse_bit_shift()
+            exp = BitAND(operand1=exp, operand2=next_exp, line=exp.line)
+        return exp
+
+    def parse_bit_shift(self) -> Exp:
+        exp = self.parse_addsub()
+        while self.peek().type == TokenType.BIT_SHIFT_LEFT or self.peek().type == TokenType.BIT_SHIFT_RIGHT:
+            op = self.consume(TokenType.BIT_SHIFT_LEFT, TokenType.BIT_SHIFT_RIGHT)
+            shift_amount = self.parse_addsub()
+            exp = BitShift(operator=op.type, value=exp, shift=shift_amount, line=exp.line)
+        return exp
+
+    def parse_addsub(self) -> Exp:
+        term = self.parse_term()
+        while self.peek().type == TokenType.ADDITION or self.peek().type == TokenType.SUBTRACTION:
+            op = self.consume(TokenType.ADDITION, TokenType.SUBTRACTION)
+            next_term = self.parse_term()
+            term = AddSub(operator=op.type, operand1=term, operand2=next_term, line=term.line)
+        return term
+    
+    def parse_term(self) -> Exp:
+        fact = self.parse_fact()
+        while (
+            self.peek().type == TokenType.MULTIPLICATION
+            or self.peek().type == TokenType.DIVISION
+            or self.peek().type == TokenType.MODULO
+            ):
+            op = self.consume(TokenType.MULTIPLICATION, TokenType.DIVISION)
+            next_fact = self.parse_fact()
+            fact = MultDivMod(operator=op.type, operand1=fact, operand2=next_fact, line=fact.line)
+        return fact
+    
+
     def parse_fact(self) -> Exp:
         tok = self.consume(
             TokenType.OPEN_PARENTHESIS,
@@ -41,281 +335,32 @@ class Parser:
         if tok.type == TokenType.OPEN_PARENTHESIS:
             tok = self.parse_comma_exp()
             self.consume(TokenType.CLOSE_PARENTHESIS)
-            return Parenthesis(exp=tok)
+            return Parenthesis(exp=tok, line=tok.line)
         
         elif tok.type == TokenType.INT_LITERAL:
-            return IntLiteral(value=int(tok.value))
+            return IntLiteral(value=int(tok.value), line=tok.line)
         
         elif (
             tok.type == TokenType.BIT_COMP or tok.type == TokenType.SUBTRACTION 
             or tok.type == TokenType.LOGICAL_NEGATION 
         ):
             inner_exp = self.parse_fact()
-            return UnOp(operator=tok.value, operand=inner_exp)
+            return UnOp(operator=tok.type, operand=inner_exp, line=tok.line)
 
         elif tok.type == TokenType.INCREMENT or tok.type == TokenType.DECREMENT:
-            op = tok.value
             id = self.consume(TokenType.ID)
-            variable = symbol.get(id.value)
-            if variable.type != "int":
-                raise SyntaxError(f"Variable of type '{variable.type}' cannot be incremented")
             if tok.type == TokenType.INCREMENT:
-                return Increment(id=id.value, prefix=True)
+                return Increment(id=id.value, prefix=True, line=tok.line)
             elif tok.type == TokenType.DECREMENT:
-                return Decrement(id=id.value, prefix=True)
+                return Decrement(id=id.value, prefix=True, line=tok.line)
 
         
         elif tok.type == TokenType.ID:
-            if tok.value not in symbol.table:
-                raise SyntaxError(f"Variable '{tok.value}' on line {tok.line} not declared")
-            if symbol.table[tok.value].initialised == False:
-                raise SyntaxError(f"Variable '{tok.value}' on line {tok.line} not initialised")
-
-            next = self.peek()
-            if next.type == TokenType.INCREMENT:
+            if self.peek().type == TokenType.INCREMENT:
                 self.consume(TokenType.INCREMENT)
-                return Increment(id=tok.value, prefix=False)
-            elif next.type == TokenType.DECREMENT:
+                return Increment(id=tok.value, prefix=False, line=tok.line)
+            elif self.peek().type == TokenType.DECREMENT:
                 self.consume(TokenType.DECREMENT)
-                return Decrement(id=tok.value, prefix=False)
+                return Decrement(id=tok.value, prefix=False, line=tok.line)
             else:
-                variable = symbol.get(tok.value)
-                type = variable.type
-                return Var(id=tok.value, type=type)
-
-    def parse_term(self) -> Exp:
-        fact = self.parse_fact()
-        next = self.peek()
-        while (
-            next.type == TokenType.MULTIPLICATION
-            or next.type == TokenType.DIVISION
-            or next.type == TokenType.MODULO
-            ):
-            op = self.consume(TokenType.MULTIPLICATION, TokenType.DIVISION)
-            next_fact = self.parse_fact()
-            fact = MultDivMod(operator=op.value, operand1=fact, operand2=next_fact)
-            next = self.peek()
-        return fact
-
-    def parse_addsub(self) -> Exp:
-        term = self.parse_term()
-        next = self.peek()
-        while next.type == TokenType.ADDITION or next.type == TokenType.SUBTRACTION:
-            op = self.consume(TokenType.ADDITION, TokenType.SUBTRACTION)
-            next_term = self.parse_term()
-            term = AddSub(operator=op.value, operand1=term, operand2=next_term)
-            next = self.peek()
-        return term
-    
-    def parse_bit_shift(self) -> Exp:
-        exp = self.parse_addsub()
-        next = self.peek()
-        while next.type == TokenType.BIT_SHIFT_LEFT or next.type == TokenType.BIT_SHIFT_RIGHT:
-            op = self.consume(TokenType.BIT_SHIFT_LEFT, TokenType.BIT_SHIFT_RIGHT)
-            shift_amount = self.parse_addsub()
-            exp = BitShift(operator=op.value, value=exp, shift=shift_amount)
-            next = self.peek()
-        return exp
-    
-    def parse_bit_and(self) -> Exp:
-        exp = self.parse_bit_shift()
-        next = self.peek()
-        while next.type == TokenType.BIT_AND:
-            self.pos += 1
-            next_exp = self.parse_bit_shift()
-            exp = BitAND(operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-    
-    def parse_bit_xor(self) -> Exp:
-        exp = self.parse_bit_and()
-        next = self.peek()
-        while next.type == TokenType.BIT_XOR:
-            self.pos += 1
-            next_exp = self.parse_bit_and()
-            exp = BitXOR(operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-    
-    def parse_bit_or(self) -> Exp:
-        exp = self.parse_bit_xor()
-        next = self.peek()
-        while next.type == TokenType.BIT_OR:
-            self.pos += 1
-            next_exp = self.parse_bit_xor()
-            exp = BitOR(operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-
-    def parse_inequality(self) -> Exp:
-        exp = self.parse_bit_or()
-        next = self.peek()
-        while (next.type == TokenType.LESS_THAN or next.type == TokenType.LESS_THAN_OR_EQUAL
-        or next.type == TokenType.GREATER_THAN or next.type == TokenType.GREATER_THAN_OR_EQUAL):
-            op = self.consume(
-                TokenType.LESS_THAN, TokenType.LESS_THAN_OR_EQUAL,
-                TokenType.GREATER_THAN, TokenType.GREATER_THAN_OR_EQUAL
-                )
-            next_exp = self.parse_bit_or()
-            exp = Inequality(operator=op.value, operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-    
-    def parse_equality(self) -> Exp:
-        exp = self.parse_inequality()
-        next = self.peek()
-        while next.type == TokenType.EQUAL or next.type == TokenType.NOT_EQUAL:
-            op = self.consume(TokenType.EQUAL, TokenType.NOT_EQUAL)
-            next_exp = self.parse_inequality()
-            exp = Equality(operator=op.value, operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-    
-    def parse_and(self) -> Exp:
-        exp = self.parse_equality()
-        next = self.peek()
-        while next.type == TokenType.AND:
-            self.pos += 1
-            next_exp = self.parse_equality()
-            exp = AND(operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-    
-    def parse_or(self) -> Exp:
-        exp = self.parse_and()
-        next = self.peek()
-        while next.type == TokenType.OR:
-            self.pos += 1
-            next_exp = self.parse_and()
-            exp = OR(operand1=exp, operand2=next_exp)
-            next = self.peek()
-        return exp
-
-    def parse_assignment(self) -> Exp:
-        next = self.peek()
-        if next.type != TokenType.ID:
-            return self.parse_or()
-        
-        self.pos += 1
-
-        next = self.peek()
-        if next.type not in (
-            TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
-            TokenType.ASSIGN_MULT, TokenType.ASSIGN_DIV, TokenType.ASSIGN_MOD,
-            TokenType.ASSIGN_BIT_AND, TokenType.ASSIGN_BIT_OR, TokenType.ASSIGN_BIT_XOR,
-            TokenType.ASSIGN_LEFT_SHIFT, TokenType.ASSIGN_RIGHT_SHIFT
-            ):
-            self.pos -= 1
-            return self.parse_or()
-        self.pos -= 1
-        var = self.consume(TokenType.ID)
-        if var.value not in symbol.table:
-            raise SyntaxError(f"Variable '{var}' not declared")
-
-        operation = self.consume(
-            TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
-            TokenType.ASSIGN_MULT, TokenType.ASSIGN_DIV, TokenType.ASSIGN_MOD,
-            TokenType.ASSIGN_BIT_AND, TokenType.ASSIGN_BIT_OR, TokenType.ASSIGN_BIT_XOR,
-            TokenType.ASSIGN_LEFT_SHIFT, TokenType.ASSIGN_RIGHT_SHIFT
-            )
-        current = symbol.get(var.value)
-        if current.initialised == False and operation != TokenType.ASSIGNMENT:
-            raise SyntaxError(f"Cannot change value of {var.value} before assignment")
-
-        type = current.type
-
-        next = self.peek()
-        if next.type == TokenType.ID:
-            assign = self.parse_assignment()
-            if isinstance(assign, Assign):
-                assign = assign.id
-        else:
-            assign = self.parse_or()
-
-        variable = Var(id=var.value, type=type)
-
-        if operation.type == TokenType.ASSIGN_ADD:
-            assign = AddSub(operator="+", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_SUB:
-            assign = AddSub(operator="-", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_MULT:
-            assign = MultDivMod(operator="*", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_DIV:
-            assign = MultDivMod(operator="/", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_MOD:
-            assign = MultDivMod(operator="%", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_BIT_AND:
-            assign = BitAND(operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_BIT_OR:
-            assign = BitOR(operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_BIT_OR:
-            assigne = BitXOR(operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_RIGHT_SHIFT:
-            assign = BitShift(operator=">>", operand1=variable, operand2=assign)
-        elif operation.type == TokenType.ASSIGN_LEFT_SHIFT:
-            assign = BitShift(operator="<<", operand1=variable, operand2=assign)
-
-        symbol.table[var.value].initialised = True
-        return Assign(id=variable, type=type, exp=assign)
-
-    def parse_comma_exp(self) -> Exp:
-        exp = self.parse_assignment()
-        next = self.peek()
-        while next.type == TokenType.COMMA:
-            self.consume(TokenType.COMMA)
-            rhs_exp = self.parse_assignment()
-            exp = CommaExp(lhs=exp, rhs = rhs_exp)
-            next = self.peek()       
-        return exp
-
-    def parse_return(self) -> Statement:
-        self.consume(TokenType.RETURN)
-        exp = self.parse_assignment()
-        return Return(exp=exp)
-
-    def parse_declare(self) -> Statement:
-        type = self.consume(TokenType.INT)
-        id = self.consume(TokenType.ID)
-        if id.value in symbol.table:
-            raise Exception(f"Variable '{id.value}' is already declared in this scope")
-        val = None
-        next = self.peek()
-        if next.type == TokenType.ASSIGNMENT:
-            self.consume(TokenType.ASSIGNMENT)
-            val = self.parse_assignment()
-        entry = SymbolEntry(id=id.value, type=type.value, initialised=True)
-        variable = Var(id=id.value, type=type)
-        symbol.insert(id.value, entry)
-        return Declare(id=variable, type=type.value, exp=val)
-
-    def parse_statement(self) -> Statement:
-        next = self.peek()
-        if next.type == TokenType.RETURN:
-            return self.parse_return()
-        elif next.type == TokenType.INT:
-            return self.parse_declare()
-        else:
-            exp = self.parse_assignment()
-            return ExpStatement(exp=exp)
-    
-    def parse_function(self) -> Function:
-        statements = []
-        self.consume(TokenType.INT)
-        name = self.consume(TokenType.ID)
-        self.consume(TokenType.OPEN_PARENTHESIS)
-        self.consume(TokenType.CLOSE_PARENTHESIS)
-        self.consume(TokenType.OPEN_BRACE)
-
-        next = self.peek()
-        while next.type != TokenType.CLOSE_BRACE:
-            stm = self.parse_statement()
-            statements.append(stm)
-            self.consume(TokenType.SEMICOLON)
-            next = self.peek()
-
-        self.consume(TokenType.CLOSE_BRACE)
-        return Function(name=name.value, body=statements)
-    
-    def parse_program(self) -> Program:
-        func = self.parse_function()
-        return Program(function=func)
+                return Var(id=tok.value, line=tok.line)
