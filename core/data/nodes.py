@@ -7,19 +7,31 @@ from core.data.token_types import TokenType
 
 @dataclass
 class Program:
-    functions: list['Function']
+    functions: list('Function')
 
 @dataclass
 class Function:
     name: str
-    variables: list[(str, str)]
+    variables: list((str, str))
     _return: TokenType
     body: 'Block'
 
 @dataclass
 class Block:
-    block_items: list['BlockItem']
+    block_items: list('BlockItem')
     symboltable: SymbolTable
+
+@dataclass
+class Declare:
+    id: 'Var'
+    type: TokenType
+    exp: 'ExpStatement'
+    line: int
+
+@dataclass
+class Return:
+    line: int
+    exp: 'ExpStatement'
 
 @dataclass
 class If:
@@ -28,18 +40,33 @@ class If:
     else_statement: Optional['Statement'] = None
 
 @dataclass
-class ExpStatement:
-    line: int
-    exp: Optional['Exp'] = None
+class For:
+    initial: Union[Declare, 'ExpStatement']
+    condition: 'Exp'
+    post_exp: 'ExpStatement'
+    statement: 'Statement'
+    symboltable: SymbolTable
+
 @dataclass
-class Declare:
-    id: 'Var'
-    type: TokenType
-    exp: Optional['Exp']
+class While:
+    condition: 'ExpStatement'
+    statement: 'Statement'
+
+@dataclass
+class DoWhile:
+    statement: 'Statement'
+    condition: 'ExpStatement'
+
+@dataclass
+class Break:
     line: int
 
 @dataclass
-class Return:
+class Continue:
+    line: int
+
+@dataclass
+class ExpStatement:
     line: int
     exp: Optional['Exp'] = None
 
@@ -61,6 +88,7 @@ class Conditional:
     condition: 'Exp'
     if_statement: 'Exp'
     else_statement: 'Exp'
+    line: int
 
 @dataclass
 class OR:
@@ -163,6 +191,11 @@ class Var:
     type: Optional[TokenType] = None
 
 @dataclass
+class FunctionCall:
+    name: str
+    param: Optional[list('Exp')]
+
+@dataclass
 class Parenthesis:
     exp: 'Exp'
     line: int
@@ -179,6 +212,6 @@ Exp = Union[
     UnOp, IntLiteral, Var, Parenthesis
     ]
 
-Statement = Union[Return, Declare, Exp, Block]
+Statement = Union[Return, Declare, Exp, Block, ExpStatement, If, For, While, DoWhile, Break, Continue]
 
 BlockItem = Union[Statement, Declare]

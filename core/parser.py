@@ -21,7 +21,10 @@ class Parser:
     
     # Returns the next token to be parsed
     def peek(self) -> Optional[Token]:
-        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+        if self.pos < len(self.tokens):
+            return self.tokens[self.pos]
+        error.report(error_msg="Incomplete code", line=self.tokens[-1].line, type="Syntax")
+        error.display("Parsing")
     
     # Returns token if the expected token is the next one
     def consume(self, *expected_type: TokenType) -> Token:
@@ -30,7 +33,18 @@ class Parser:
             if tok.type == e:
                 self.pos += 1
                 return tok
-        error.report(error_msg=f"Expected {expected_type}, got '{tok.value}'", line=tok.line, type="SyntaxError")
+        error.report(error_msg=f"Expected {[t.name for t in expected_type]}, got '{tok.type.name}'", line=tok.line, type="SyntaxError")
+        error.display("Parsing")
+
+    def search_blocks(self, id: str) -> bool:
+        i = -1
+        while -i <= len(self.table_stack):
+            symbol = self.table_stack[i]
+            if id in symbol.table:
+                return True
+            else:
+                i -= 1
+        return False
     
     # Builds AST from the program node down
     def parse_program(self) -> Program:
@@ -66,13 +80,6 @@ class Parser:
         symbol = SymbolTable(fun_name=name.value, args=args, return_type=return_type.type)
         self.consume(TokenType.CLOSE_PARENTHESIS)
 
-        # TODO: add in compatibility for multiple functions
-        """if self.peek().type != TokenType.OPEN_BRACE and name.value != "main":
-            self.consume(TokenType.SEMICOLON)
-            return Function(
-            name=name.value, variables=args,
-            _return=return_type.type, body=statements, symboltable=symbol
-            )"""
         block = self.parse_block(symbol)
         return Function(
             name=name.value, variables=args,
@@ -92,7 +99,6 @@ class Parser:
                 blk_itms.append(self.parse_block())
             else:
                 blk_itms.append(self.parse_statement())
-            self.consume(TokenType.SEMICOLON)
 
         self.consume(TokenType.CLOSE_BRACE)
         self.table_stack.pop()
@@ -101,15 +107,29 @@ class Parser:
 
     def parse_statement(self) -> Statement:
         if self.peek().type == TokenType.RETURN:
-            return self.parse_return()
+            ret = self.parse_return()
+            self.consume(TokenType.SEMICOLON)
+            return ret
         elif self.peek().type == TokenType.IF:
             return self.parse_if()
-        elif self.peek().type == TokenType.SEMICOLON:
-            null_stm = self.consume(TokenType.SEMICOLON)
-            return ExpStatement(line=null_stm.line)
+        elif self.peek().type == TokenType.FOR:
+            return self.parse_for()
+        elif self.peek().type == TokenType.WHILE:
+            return self.parse_while()
+        elif self.peek().type == TokenType.DO:
+            return self.parse_do_while()
+        elif self.peek().type == TokenType.BREAK:
+            br = self.consume(TokenType.BREAK)
+            self.consume(TokenType.SEMICOLON)
+            return Break(line=br.line)
+        elif self.peek().type == TokenType.CONTINUE:
+            cn = self.consume(TokenType.CONTINUE)
+            self.consume(TokenType.SEMICOLON)
+            return Continue(line=cn.line)
         else:
-            exp = self.parse_assignment()
-            return ExpStatement(line=exp.line, exp=exp)
+            exp = self.parse_exp_statement()
+            self.consume(TokenType.SEMICOLON)
+            return exp
         
 
     # TODO: add in compatibility for calling functions
@@ -121,14 +141,20 @@ class Parser:
                 TokenType.CHAR, TokenType.VOID
                 )
         id = self.consume(TokenType.ID)
+        if id.value in symbol.table:
+            error.report(
+                error_msg=f"Cannot declare variable of same name {id.value} again in same scope",
+                line=id.line, type="SyntaxError"
+            )
         val = None
         next = self.peek()
         if next.type == TokenType.ASSIGNMENT:
             self.consume(TokenType.ASSIGNMENT)
             val = self.parse_assignment()
-        entry = SymbolEntry(id=id.value, type=type.type, initialised=True)
+        entry = SymbolEntry(id=id.value, type=type.type, initialised=True, line=val.line)
         variable = Var(id=id.value, type=type.type, line=id.line)
         symbol.insert(id.value, entry)
+        self.consume(TokenType.SEMICOLON)
         return Declare(id=variable, type=type.type, exp=val, line=id.line)
 
     def parse_return(self) -> Statement:
@@ -160,6 +186,63 @@ class Parser:
             else_stm = self.parse_statement()
         return If(condition=cond, if_statement=if_stm, else_statement=else_stm)
     
+    def parse_for(self) -> Statement:
+        self.consume(TokenType.FOR)
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        symbol = None
+        if self.peek().type == TokenType.INT:
+            symbol = SymbolTable()
+            self.table_stack.append(symbol)
+            init = self.parse_declare()
+        else:
+            init = self.parse_exp_statement()
+        self.consume(TokenType.SEMICOLON)
+        control = self.parse_exp_statement()
+        if not control.exp:
+            control = ExpStatement(line=control.line, exp=IntLiteral(value=1, line=control.line))
+        self.consume(TokenType.SEMICOLON)
+        post_exp = self.parse_exp_statement()
+        if self.peek().type == TokenType.CLOSE_PARENTHESIS:
+            self.consume(TokenType.CLOSE_PARENTHESIS)
+        stm = self.parse_block()
+        if isinstance(init, Declare):
+            self.table_stack.pop()
+        return For(initial=init, condition=control, post_exp=post_exp, statement=stm, symboltable=(symbol if symbol else None))
+
+    def parse_while(self) -> Statement:
+        self.consume(TokenType.WHILE)
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        control = self.parse_exp_statement()
+        if not control.exp:
+            control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
+        else:
+            self.consume(TokenType.CLOSE_PARENTHESIS)
+        stm = self.parse_block()
+        return While(condition=control, statement=stm)
+
+    def parse_do_while(self) -> Statement:
+        self.consume(TokenType.DO)
+        stm = self.parse_block()
+        self.consume(TokenType.WHILE)
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        control = self.parse_exp_statement()
+        if not control.exp:
+            control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
+        else:
+            self.consume(TokenType.CLOSE_PARENTHESIS)
+        return DoWhile(statement=stm, condition=control)
+        
+    def parse_exp_statement(self) -> Statement:
+        if self.peek().type == TokenType.SEMICOLON:
+            null_stm = self.consume(TokenType.SEMICOLON)
+            return ExpStatement(line=null_stm.line)
+        elif self.peek().type == TokenType.CLOSE_PARENTHESIS:
+            null_stm = self.consume(TokenType.CLOSE_PARENTHESIS)
+            return ExpStatement(line=null_stm.line)
+        else:
+            exp = self.parse_assignment()
+            return ExpStatement(line=exp.line, exp=exp)
+    
     def parse_comma_exp(self) -> Exp:
         exp = self.parse_assignment()
         while self.peek().type == TokenType.COMMA:
@@ -183,6 +266,16 @@ class Parser:
             return self.parse_conditional()
         self.pos -= 1
         var = self.consume(TokenType.ID)
+
+        if self.search_blocks(var.value) == None:
+            error.report(error_msg=f"Cannot assign a value to undeclared variable {var.value}", line=var.line, type="SyntaxError")
+        
+        symbol = self.table_stack[-1]
+        if self.peek().type != TokenType.ASSIGNMENT and not symbol.get(var.value).initialised:
+            error.report(
+                error_msg=f"Cannot perform operation {self.peek().type.name} on uninitialised variable {var.value}",
+                line=var.line, type="SyntaxError"
+                )
 
         operation = self.consume(
             TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
@@ -230,7 +323,7 @@ class Parser:
         if_stm = self.parse_assignment()
         self.consume(TokenType.COLON)
         else_stm = self.parse_conditional()
-        return Conditional(condition=cond, if_statement=if_stm, else_statement=else_stm)
+        return Conditional(condition=cond, if_statement=if_stm, else_statement=else_stm, line=cond.line)
 
     def parse_or(self) -> Exp:
         exp = self.parse_and()
@@ -315,7 +408,7 @@ class Parser:
             or self.peek().type == TokenType.DIVISION
             or self.peek().type == TokenType.MODULO
             ):
-            op = self.consume(TokenType.MULTIPLICATION, TokenType.DIVISION)
+            op = self.consume(TokenType.MULTIPLICATION, TokenType.DIVISION, TokenType.MODULO)
             next_fact = self.parse_fact()
             fact = MultDivMod(operator=op.type, operand1=fact, operand2=next_fact, line=fact.line)
         return fact
@@ -349,6 +442,10 @@ class Parser:
 
         elif tok.type == TokenType.INCREMENT or tok.type == TokenType.DECREMENT:
             id = self.consume(TokenType.ID)
+            symbol = self.table_stack[-1]
+            if tok.value not in symbol.table:
+                error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
+
             if tok.type == TokenType.INCREMENT:
                 return Increment(id=id.value, prefix=True, line=tok.line)
             elif tok.type == TokenType.DECREMENT:
@@ -356,11 +453,26 @@ class Parser:
 
         
         elif tok.type == TokenType.ID:
-            if self.peek().type == TokenType.INCREMENT:
+            symbol = self.table_stack[-1]
+            if self.search_blocks(tok.value) == False:
+                error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
+
+            if self.peek().type == TokenType.OPEN_PARENTHESIS:
+                self.consume(TokenType.OPEN_PARENTHESIS)
+                params = []
+                while self.peek().type == TokenType.ID:
+                    arg = self.consume(TokenType.ID)
+                    params.append(arg)
+                    if self.peek().type == TokenType.COMMA:
+                        self.consume(TokenType.COMMA)
+                return FunctionCall(name=tok.value, param=params)
+
+            elif self.peek().type == TokenType.INCREMENT:
                 self.consume(TokenType.INCREMENT)
                 return Increment(id=tok.value, prefix=False, line=tok.line)
             elif self.peek().type == TokenType.DECREMENT:
                 self.consume(TokenType.DECREMENT)
                 return Decrement(id=tok.value, prefix=False, line=tok.line)
+                
             else:
                 return Var(id=tok.value, line=tok.line)

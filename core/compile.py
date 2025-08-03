@@ -1,15 +1,23 @@
 from .lexer import Lexer as lexer
 from .parser import Parser as parser
 from .codegen import CodeGenerator as codegen
+from core.util.error import error
 
 import os
 import subprocess
 
 def compile(text):
+    print("Undergoing lexical analysis...\n")
     tokens = lexer(text).tokenise()
-    ast = parser(tokens).parse_program()
+    error.display("Lexing")
 
+    print("...and parsing...\n")
+    ast = parser(tokens).parse_program()
+    error.display("Parsing")
+
+    print("...and generating the assembly\n")
     assembly = codegen(ast).generate_program()
+    error.display("Code generation")
 
     with open("main.s", "w") as file:
         file.write(assembly)
