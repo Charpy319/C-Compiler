@@ -10,9 +10,15 @@ class Program:
     functions: list('Function')
 
 @dataclass
+class FunctionProto:
+    name: str
+    variables: list((TokenType, str))
+    _return: TokenType
+
+@dataclass
 class Function:
     name: str
-    variables: list((str, str))
+    variables: list((TokenType, str))
     _return: TokenType
     body: 'Block'
 
@@ -194,6 +200,7 @@ class Var:
 class FunctionCall:
     name: str
     param: Optional[list('Exp')]
+    line: int
 
 @dataclass
 class Parenthesis:
@@ -209,7 +216,8 @@ Exp = Union[
     Equality, Inequality,
     BitOR, BitXOR, BitAND, BitShift,
     AddSub, MultDivMod, 
-    UnOp, IntLiteral, Var, Parenthesis
+    UnOp, IntLiteral, Var, FunctionCall,
+    Parenthesis
     ]
 
 Statement = Union[Return, Declare, Exp, Block, ExpStatement, If, For, While, DoWhile, Break, Continue]

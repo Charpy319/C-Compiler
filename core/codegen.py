@@ -18,7 +18,7 @@ class LabelGen:
 sizeof = {
     TokenType.INT: 8,
     TokenType.FLOAT: 8,
-    TokenType.CHAR: 1,
+    TokenType.CHAR: 8,
 }
 
 class Memory:
@@ -29,8 +29,8 @@ class Memory:
     def make_space(self, table: dict) -> int:
         mem = 0
         for sym in table:
-            type = table[sym].type
-            mem += sizeof[type]
+            _type = table[sym].type
+            mem += sizeof[_type]
         total_memory = 16 * math.ceil(mem / 16.0)   # Memory allocated in stack frame has to be a multiple of 16
         self.memory = total_memory
         return total_memory
@@ -40,8 +40,10 @@ class Memory:
             error.report(error_msg="Error assigning memory, no available space", line=line, type="MemoryError")
             error.display("Code Generation")
         
-        self.memory -= 8
-        self.offset -= 8
+        _type = table[id].type
+        mem = sizeof[_type]
+        self.memory -= mem
+        self.offset -= mem
         entry = table[id]
         entry.offset = self.offset
         return self.offset
@@ -58,17 +60,25 @@ class CodeGenerator:
             if id in symbol.table:
                 if line and line >= symbol.table[id].line:
                     return symbol.get(id)
-            
+        return None
 
+    def padding(self, args) -> int:
+        if len(args) % 2 == 1:
+            return 8
+        else:
+            return 0
+                   
     def generate_program(self) -> str:
         assembly = ".section __TEXT,__text\n"
         for func in self.root.functions:
+            if isinstance(func, FunctionProto):
+                continue
             assembly += self.generate_function(func)
         return assembly
 
     def generate_function(self, func: Function) -> str:
         return  (
-            f".globl   _{func.name}\n"
+            f"    .globl   _{func.name}\n"
             f"_{func.name}:\n" +
             "    pushq    %rbp\n"
             "    movq    %rsp, %rbp\n" +
@@ -119,22 +129,22 @@ class CodeGenerator:
                     self.generate_statement(stm.if_statement) +
                     f"_{end}:\n"
                 )
-
+        # TODO: Something wrong with declaring variables and break in loops not working, debug tomorrow
         elif isinstance(stm, For):
-            assembly = (self.generate_statement(stm.initial) if stm.initial.exp else "")  # Not generate_exp as could be of type ExpStatement
-            start = LabelGen.generate('start')
-            end = LabelGen.generate('end')
-            cont = LabelGen.generate('cont')
             if stm.symboltable:
                 symbol = stm.symboltable
                 self.table_stack.append(symbol)
             else:
                 symbol = self.table_stack[-1]
+            assembly = (self.generate_statement(stm.initial) if stm.initial.exp else "")
+            start = LabelGen.generate('start')
+            end = LabelGen.generate('end')
+            cont = LabelGen.generate('cont')
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=cont))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
             condition = self.generate_statement(stm.condition)
             post_exp = self.generate_statement(stm.post_exp)
-            statement = self.generate_block(stm.statement)
+            statement = self.generate_statement(stm.statement)
             assembly += (
                 f"_{start}:\n" +
                 condition +
@@ -142,7 +152,6 @@ class CodeGenerator:
                 f"    je    _{end}\n" +
                 statement +
                 f"_{cont}:\n" +
-                # TODO: post_exp is none so cant concactenate so need to write condition, same for others
                 (post_exp if stm.post_exp.exp else "") +
                 f"    jmp    _{start}\n"
                 f"_{end}:\n"
@@ -156,7 +165,7 @@ class CodeGenerator:
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=start))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
             condition = self.generate_statement(stm.condition)
-            statement = self.generate_block(stm.statement)
+            statement = self.generate_statement(stm.statement)
             return (
                 f"_{start}:" +
                 condition +
@@ -174,7 +183,7 @@ class CodeGenerator:
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=start))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
             condition = self.generate_statement(stm.condition)
-            statement = self.generate_block(stm.statement)
+            statement = self.generate_statement(stm.statement)
             return (
                 f"_{start}:" +
                 statement +
@@ -187,10 +196,16 @@ class CodeGenerator:
         
         elif isinstance(stm, Break):
             br = self.search_blocks("_break")
+            if not br:
+                error.report(error_msg="Break can only be used in loops", line=stm.line, type="SyntaxError")
+                error.display("Code Generation")
             return f"    jmp    _{br.name}\n"
 
         elif isinstance(stm, Continue):
             cn = self.search_blocks("_continue")
+            if not cn:
+                error.report(error_msg="Continue can only be used in loops", line=stm.line, type="SyntaxError")
+                error.display("Code Generaton")
             return f"    jmp _{cn.name}\n"
             
         elif isinstance(stm, ExpStatement):
@@ -245,7 +260,7 @@ class CodeGenerator:
             return (
                 self.generate_exp(exp.operand1) +
                 "    cmpq    $0, %rax\n"
-                f"    jne    _{end}\n"
+                f"    je    _{clause}\n"
                 "    movq    $1, %rax\n"
                 "    movzx    %al, %rax\n"
                 f"    jmp    _{end}\n"
@@ -501,5 +516,25 @@ class CodeGenerator:
         elif isinstance(exp, Parenthesis):
             return self.generate_exp(exp.exp)
         
+        elif isinstance(exp, FunctionCall):
+            assembly = ""
+            params = exp.param
+            padding = self.padding(params)
+            if padding:
+                assembly += f"    subq    ${padding}, %rsp\n"
+            for i in range(len(params)):
+                assembly += (
+                    self.generate_exp(params[i]) +
+                    "    pushq    %rax\n"
+                )
+            assembly += f"    call    _{exp.name}\n"
+            if params:
+                cleanup = 8 * len(params)
+                assembly += (
+                    f"    addq    ${cleanup}, %rsp\n" +
+                    (f"    addq    ${padding}, %rsp\n" if padding else "")
+                    )
+            return assembly
+
         else:
             error.report(error_msg=f"Incorrect use of {exp}", line=exp.line, type="Syntax")

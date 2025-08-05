@@ -2,12 +2,12 @@
 from core.data.token_types import TokenType
 from typing import Optional
 class SymbolEntry:
-    def __init__(self, id: str, type: TokenType, initialised: bool, line: int):
+    def __init__(self, id: str, type: TokenType, initialised: bool, line: int, offset: Optional[int] = None):
         self.id = id
         self.type = type
         self.initialised = initialised
         self.line = line
-        self.offset = None
+        self.offset = offset
 
 class LabelEntry:
     def __init__(self, id: str, name: str):
@@ -23,3 +23,5 @@ class SymbolTable:
 
     def get(self, id: str) -> SymbolEntry:
         return self.table[id]
+
+func_table = {}

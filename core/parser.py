@@ -6,7 +6,7 @@ To read more about each function and their relationships, refer to the parser do
 from typing import Optional
 from core.data.token_types import *
 from core.data.nodes import *
-from core.util.symbol_table import SymbolTable, SymbolEntry
+from core.util.symbol_table import SymbolTable, SymbolEntry, func_table
 from core.util.error import error
 
 class Parser:
@@ -45,6 +45,9 @@ class Parser:
             else:
                 i -= 1
         return False
+
+    def next_is_block(self):
+        return self.peek().type == TokenType.OPEN_BRACE
     
     # Builds AST from the program node down
     def parse_program(self) -> Program:
@@ -61,30 +64,73 @@ class Parser:
             )
         name = self.consume(TokenType.ID)
         self.consume(TokenType.OPEN_PARENTHESIS)
+
         args = []
         while self.peek().type in self.keywords:
             arg_name = None
-            type = self.consume(
+            _type = self.consume(
                 TokenType.INT, TokenType.FLOAT,
                 TokenType.CHAR, TokenType.VOID
                 )
+            if _type.type == TokenType.VOID:
+                break
             if self.peek().type == TokenType.ID:
                 arg_name = self.consume(TokenType.ID)
-            args.append((type.type, arg_name.value) if arg_name else (type.type, None))
+            args.append((_type.type, arg_name.value) if arg_name else (_type.type, None))
             if self.peek().type == TokenType.COMMA:
-                self.consume()
+                self.consume(TokenType.COMMA)
                 if self.peek().type not in self.keywords:
                     error.report(error_msg=f"Misplaced comma in function {name.value}", line=name.line, type="SyntaxError")
 
-        if not args: args.append((TokenType.VOID, None))
-        symbol = SymbolTable(fun_name=name.value, args=args, return_type=return_type.type)
         self.consume(TokenType.CLOSE_PARENTHESIS)
+        if self.peek().type == TokenType.SEMICOLON:
+            self.consume(TokenType.SEMICOLON)
+            func = FunctionProto(name=name.value, variables=args, _return=return_type.type)
+            if name.value in func_table:
+                if isinstance(func_table[name.value], FunctionProto):
+                    error.report(
+                        error_msg="Cannot declare two functions of the same name",
+                        line=name.line, type="SyntaxError"
+                        )
+                if len(declared.variables) != len(func.variables):
+                    error.report(
+                        error_msg=f"Mismatch parameter count in function {name.value}",
+                        line=name.line, type="SyntaxError"
+                    )
+            else:
+                func_table[name.value] = func
+            return func
+
+        symbol = SymbolTable(fun_name=name.value, args=args, return_type=return_type.type)
+        param_offset = 16
+        for i in range(-1, -(len(args) + 1), -1):
+            _type, arg_name = args[i]
+            entry = SymbolEntry(id=arg_name, type=_type, initialised=True, line=name.line, offset=param_offset)
+            symbol.insert(id=arg_name, entry=entry)
+            param_offset += 8
+
+        func = Function(
+            name=name.value, variables=args,
+            _return=return_type.type, body=None
+            )
+        if name.value in func_table:
+            declared = func_table[name.value]
+            if isinstance(declared, Function):
+                error.report(
+                    error_msg="Cannot declare two functions of the same name",
+                    line=name.line, type="SyntaxError"
+                    )
+            if len(declared.variables) != len(func.variables):
+                error.report(
+                    error_msg=f"Mismatch parameter count in function {name.value}",
+                    line=name.line, type="SyntaxError"
+                )
+        else:
+            func_table[name.value] = func
 
         block = self.parse_block(symbol)
-        return Function(
-            name=name.value, variables=args,
-            _return=return_type.type, body=block
-            )
+        func.body = block
+        return func
 
     def parse_block(self, func_table: SymbolTable = None) -> BlockItem:
         if not func_table:
@@ -95,15 +141,14 @@ class Parser:
         while self.peek().type != TokenType.CLOSE_BRACE:
             if self.peek().type in self.keywords:
                 blk_itms.append(self.parse_declare())
-            elif self.peek().type == TokenType.OPEN_BRACE:
+            elif self.next_is_block():
                 blk_itms.append(self.parse_block())
             else:
                 blk_itms.append(self.parse_statement())
 
         self.consume(TokenType.CLOSE_BRACE)
         self.table_stack.pop()
-        return Block(block_items=blk_itms, symboltable=func_table)
-        
+        return Block(block_items=blk_itms, symboltable=func_table)      
 
     def parse_statement(self) -> Statement:
         if self.peek().type == TokenType.RETURN:
@@ -117,7 +162,9 @@ class Parser:
         elif self.peek().type == TokenType.WHILE:
             return self.parse_while()
         elif self.peek().type == TokenType.DO:
-            return self.parse_do_while()
+            do_while = self.parse_do_while()
+            self.consume(TokenType.SEMICOLON)
+            return do_while
         elif self.peek().type == TokenType.BREAK:
             br = self.consume(TokenType.BREAK)
             self.consume(TokenType.SEMICOLON)
@@ -128,15 +175,11 @@ class Parser:
             return Continue(line=cn.line)
         else:
             exp = self.parse_exp_statement()
-            self.consume(TokenType.SEMICOLON)
             return exp
-        
-
-    # TODO: add in compatibility for calling functions
 
     def parse_declare(self) -> Declare:
         symbol = self.table_stack[-1]
-        type = self.consume(
+        _type = self.consume(
                 TokenType.INT, TokenType.FLOAT,
                 TokenType.CHAR, TokenType.VOID
                 )
@@ -147,15 +190,14 @@ class Parser:
                 line=id.line, type="SyntaxError"
             )
         val = None
-        next = self.peek()
-        if next.type == TokenType.ASSIGNMENT:
+        if self.peek().type == TokenType.ASSIGNMENT:
             self.consume(TokenType.ASSIGNMENT)
             val = self.parse_assignment()
-        entry = SymbolEntry(id=id.value, type=type.type, initialised=True, line=val.line)
-        variable = Var(id=id.value, type=type.type, line=id.line)
+        entry = SymbolEntry(id=id.value, type=_type.type, initialised=True, line=val.line)
+        variable = Var(id=id.value, type=_type.type, line=id.line)
         symbol.insert(id.value, entry)
         self.consume(TokenType.SEMICOLON)
-        return Declare(id=variable, type=type.type, exp=val, line=id.line)
+        return Declare(id=variable, type=_type.type, exp=val, line=id.line)
 
     def parse_return(self) -> Statement:
         ret = self.consume(TokenType.RETURN)
@@ -170,7 +212,7 @@ class Parser:
         self.consume(TokenType.OPEN_PARENTHESIS)
         cond = self.parse_assignment()
         self.consume(TokenType.CLOSE_PARENTHESIS)
-        if self.peek().type == TokenType.OPEN_BRACE:
+        if self.next_is_block():
             if_stm = self.parse_block()
         else:
             if_stm = self.parse_statement()
@@ -180,7 +222,7 @@ class Parser:
         self.consume(TokenType.ELSE)
         if self.peek().type == TokenType.IF:
             else_stm = self.parse_if()
-        elif self.peek().type == TokenType.OPEN_BRACE:
+        elif self.next_is_block():
             else_stm = self.parse_block()
         else:
             else_stm = self.parse_statement()
@@ -196,15 +238,15 @@ class Parser:
             init = self.parse_declare()
         else:
             init = self.parse_exp_statement()
-        self.consume(TokenType.SEMICOLON)
         control = self.parse_exp_statement()
         if not control.exp:
             control = ExpStatement(line=control.line, exp=IntLiteral(value=1, line=control.line))
-        self.consume(TokenType.SEMICOLON)
         post_exp = self.parse_exp_statement()
-        if self.peek().type == TokenType.CLOSE_PARENTHESIS:
-            self.consume(TokenType.CLOSE_PARENTHESIS)
-        stm = self.parse_block()
+        if self.next_is_block():
+            stm = self.parse_block()
+        else:
+            stm = self.parse_statement()
+        
         if isinstance(init, Declare):
             self.table_stack.pop()
         return For(initial=init, condition=control, post_exp=post_exp, statement=stm, symboltable=(symbol if symbol else None))
@@ -215,21 +257,23 @@ class Parser:
         control = self.parse_exp_statement()
         if not control.exp:
             control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
+        if self.next_is_block():
+            stm = self.parse_block()
         else:
-            self.consume(TokenType.CLOSE_PARENTHESIS)
-        stm = self.parse_block()
+            stm = self.parse_statement()
         return While(condition=control, statement=stm)
 
     def parse_do_while(self) -> Statement:
         self.consume(TokenType.DO)
-        stm = self.parse_block()
+        if self.next_is_block():
+            stm = self.parse_block()
+        else:
+            stm = self.parse_statement()
         self.consume(TokenType.WHILE)
         self.consume(TokenType.OPEN_PARENTHESIS)
         control = self.parse_exp_statement()
         if not control.exp:
             control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
-        else:
-            self.consume(TokenType.CLOSE_PARENTHESIS)
         return DoWhile(statement=stm, condition=control)
         
     def parse_exp_statement(self) -> Statement:
@@ -241,6 +285,10 @@ class Parser:
             return ExpStatement(line=null_stm.line)
         else:
             exp = self.parse_assignment()
+            if self.peek().type == TokenType.CLOSE_PARENTHESIS:
+                self.consume(TokenType.CLOSE_PARENTHESIS)
+            else:
+                self.consume(TokenType.SEMICOLON)
             return ExpStatement(line=exp.line, exp=exp)
     
     def parse_comma_exp(self) -> Exp:
@@ -453,21 +501,14 @@ class Parser:
 
         
         elif tok.type == TokenType.ID:
+            if self.peek().type == TokenType.OPEN_PARENTHESIS:
+                return self.parse_func_call(tok)
+
             symbol = self.table_stack[-1]
             if self.search_blocks(tok.value) == False:
                 error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
 
-            if self.peek().type == TokenType.OPEN_PARENTHESIS:
-                self.consume(TokenType.OPEN_PARENTHESIS)
-                params = []
-                while self.peek().type == TokenType.ID:
-                    arg = self.consume(TokenType.ID)
-                    params.append(arg)
-                    if self.peek().type == TokenType.COMMA:
-                        self.consume(TokenType.COMMA)
-                return FunctionCall(name=tok.value, param=params)
-
-            elif self.peek().type == TokenType.INCREMENT:
+            if self.peek().type == TokenType.INCREMENT:
                 self.consume(TokenType.INCREMENT)
                 return Increment(id=tok.value, prefix=False, line=tok.line)
             elif self.peek().type == TokenType.DECREMENT:
@@ -476,3 +517,24 @@ class Parser:
                 
             else:
                 return Var(id=tok.value, line=tok.line)
+
+    def parse_func_call(self, name: Token):
+        if name.value not in func_table:
+            error.report(error_msg=f"Cannot call undeclared function {name.value}", line=name.line, type="SyntaxError")
+            error.display("Parsing")
+        self.consume(TokenType.OPEN_PARENTHESIS)
+        params = []
+        while self.peek().type != TokenType.CLOSE_PARENTHESIS:
+            arg = self.parse_conditional()
+            params.append(arg)
+            if self.peek().type == TokenType.COMMA:
+                self.consume(TokenType.COMMA)
+
+        func = func_table[name.value]   
+        if len(func.variables) != len(params):
+            error.report(
+                error_msg=f"Incorrect parameter count in calling function {name.value}",
+                line=name.line, type="SyntanError"
+            )
+        self.consume(TokenType.CLOSE_PARENTHESIS)
+        return FunctionCall(name=name.value, param=params, line=name.line)
