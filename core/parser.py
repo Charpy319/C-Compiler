@@ -6,7 +6,7 @@ To read more about each function and their relationships, refer to the parser do
 from typing import Optional
 from core.data.token_types import *
 from core.data.nodes import *
-from core.util.symbol_table import SymbolTable, SymbolEntry, func_table
+from core.util.symbol_table import SymbolTable, SymbolEntry, global_table, GlobalEntry
 from core.util.error import error
 
 class Parser:
@@ -33,7 +33,10 @@ class Parser:
             if tok.type == e:
                 self.pos += 1
                 return tok
-        error.report(error_msg=f"Expected {[t.name for t in expected_type]}, got '{tok.type.name}'", line=tok.line, type="SyntaxError")
+        error.report(
+            error_msg=f"Expected {[t.name for t in expected_type]}, got '{tok.type.name}'",
+            line=tok.line, type="SyntaxError"
+            )
         error.display("Parsing")
 
     def search_blocks(self, id: str) -> bool:
@@ -44,28 +47,83 @@ class Parser:
                 return True
             else:
                 i -= 1
+        if id in global_table and isinstance(global_table[id], GlobalEntry):
+            return True
         return False
 
     def next_is_block(self):
         return self.peek().type == TokenType.OPEN_BRACE
+
+    def remove_declare(self, decl_set, inits):
+        for i in inits:
+            if i.id.id in decl_set:
+                decl
+    # TODO: remove uninits
     
     # Builds AST from the program node down
     def parse_program(self) -> Program:
-        functions = []
+        inits = []
+        uninits = []
+        funcs = []
+        decl_set = set()
         while self.pos < len(self.tokens):
-            func = self.parse_function()
-            functions.append(func)
-        return Program(functions=functions)
+            top = self.parse_global()
+            if isinstance(top, Function):
+                funcs.append(top)
+            elif isinstance(top, GlobalVar):
+                if top.init:
+                    decl_set.add(top.id.id)
+                    inits.append(top)
+                else:
+                    uninits.append(top)
+            uninits = self.remove_declare(decl_set, inits)
+        return Program(init_vars=inits, uninit_vars=uninits, funcs=funcs)
 
-    def parse_function(self) -> Function:
-        return_type = self.consume(
+    def parse_global(self) -> Top:
+        _type = self.consume(
             TokenType.INT, TokenType.FLOAT,
             TokenType.CHAR, TokenType.VOID
             )
         name = self.consume(TokenType.ID)
-        self.consume(TokenType.OPEN_PARENTHESIS)
+        if self.peek().type == TokenType.ASSIGNMENT or self.peek().type == TokenType.SEMICOLON:
+            return self.parse_global_var(_type=_type, id=name)
+        else:
+            return self.parse_function(return_type=_type, name=name)
 
+    def parse_global_var(self, _type: TokenType, id: TokenType) -> Top:
+        val = 0
+        init = False
+        if self.peek().type == TokenType.ASSIGNMENT:
+            init = True
+            self.consume(TokenType.ASSIGNMENT)
+            val = self.parse_assignment()
+        entry = GlobalEntry(id=id.value, type=_type.type, initialised=init, line=id.line)
+        variable = Var(id=id.value, type=_type.type, line=id.line)
+
+        if id.value in global_table:
+            if not isinstance(global_table[id.value], GlobalEntry):
+                error.report(
+                    error_msg=f"Cannot declare global variable '{id.value}', a function has that name already",
+                    line=id.line, type="SyntaxError"
+                )
+            elif global_table[id.value].initialised and init == True:
+                error.report(
+                    error_msg=f"Global variable '{id.value}' already declared and initialised",
+                    line=id.line, type="SyntaxError"
+                )
+            elif not global_table[id.value].initialised and init == True:
+                global_table[id.value].initialised == True
+                global_table[id.value].exp = val
+        else:
+            global_table[id.value] = entry
+        self.consume(TokenType.SEMICOLON)
+        error.display("Parsing")
+        return GlobalVar(id=variable, type=_type.type, exp=val, line=id.line, init=init)
+    
+    def parse_function(self, return_type: TokenType, name: TokenType) -> Top:
+        self.consume(TokenType.OPEN_PARENTHESIS)
         args = []
+        param_set = set()
         while self.peek().type in self.keywords:
             arg_name = None
             _type = self.consume(
@@ -76,6 +134,12 @@ class Parser:
                 break
             if self.peek().type == TokenType.ID:
                 arg_name = self.consume(TokenType.ID)
+                if arg_name.value in param_set:
+                    error.report(
+                        error_msg=f"Cannot have duplicate parameters '{arg_name.value}' in function '{name.value}'",
+                        line=name.line, type="SyntaxError"
+                        )
+                param_set.add(arg_name.value)
             args.append((_type.type, arg_name.value) if arg_name else (_type.type, None))
             if self.peek().type == TokenType.COMMA:
                 self.consume(TokenType.COMMA)
@@ -85,21 +149,28 @@ class Parser:
         self.consume(TokenType.CLOSE_PARENTHESIS)
         if self.peek().type == TokenType.SEMICOLON:
             self.consume(TokenType.SEMICOLON)
-            func = FunctionProto(name=name.value, variables=args, _return=return_type.type)
-            if name.value in func_table:
-                if isinstance(func_table[name.value], FunctionProto):
+            func = Function(name=name.value, variables=args, _return=return_type.type, prototype=True)
+            if name.value in global_table:
+                declared = global_table[name.value]
+                if isinstance(declared, GlobalEntry):
+                    error.report(
+                        error_msg=f"Cannot declare function '{name.value}' a global variable already has that name",
+                        line=name.line, type="SyntaxError"
+                        )
+                elif declared.prototype:
                     error.report(
                         error_msg="Cannot declare two functions of the same name",
                         line=name.line, type="SyntaxError"
                         )
-                if len(declared.variables) != len(func.variables):
+                elif len(declared.variables) != len(func.variables):
                     error.report(
                         error_msg=f"Mismatch parameter count in function {name.value}",
                         line=name.line, type="SyntaxError"
                     )
             else:
-                func_table[name.value] = func
-            return func
+                global_table[name.value] = func
+            error.display("Parsing")
+            return
 
         symbol = SymbolTable(fun_name=name.value, args=args, return_type=return_type.type)
         param_offset = 16
@@ -111,31 +182,37 @@ class Parser:
 
         func = Function(
             name=name.value, variables=args,
-            _return=return_type.type, body=None
+            _return=return_type.type, prototype=False
             )
-        if name.value in func_table:
-            declared = func_table[name.value]
-            if isinstance(declared, Function):
+        if name.value in global_table:
+            declared = global_table[name.value]
+            if isinstance(declared, GlobalEntry):
+                    error.report(
+                        error_msg=f"Cannot declare function '{name.value}' a global variable already has that name",
+                        line=name.line, type="SyntaxError"
+                        )
+            elif not declared.prototype:
                 error.report(
                     error_msg="Cannot declare two functions of the same name",
                     line=name.line, type="SyntaxError"
                     )
-            if len(declared.variables) != len(func.variables):
+            elif len(declared.variables) != len(func.variables):
                 error.report(
                     error_msg=f"Mismatch parameter count in function {name.value}",
                     line=name.line, type="SyntaxError"
                 )
         else:
-            func_table[name.value] = func
+            global_table[name.value] = func
+        error.display("Parsing")
 
         block = self.parse_block(symbol)
         func.body = block
         return func
 
-    def parse_block(self, func_table: SymbolTable = None) -> BlockItem:
-        if not func_table:
-            func_table = SymbolTable()
-        self.table_stack.append(func_table)
+    def parse_block(self, global_table: SymbolTable = None) -> BlockItem:
+        if not global_table:
+            global_table = SymbolTable()
+        self.table_stack.append(global_table)
         blk_itms = []
         self.consume(TokenType.OPEN_BRACE)
         while self.peek().type != TokenType.CLOSE_BRACE:
@@ -148,7 +225,7 @@ class Parser:
 
         self.consume(TokenType.CLOSE_BRACE)
         self.table_stack.pop()
-        return Block(block_items=blk_itms, symboltable=func_table)      
+        return Block(block_items=blk_itms, symboltable=global_table)      
 
     def parse_statement(self) -> Statement:
         if self.peek().type == TokenType.RETURN:
@@ -175,6 +252,7 @@ class Parser:
             return Continue(line=cn.line)
         else:
             exp = self.parse_exp_statement()
+            self.consume(TokenType.SEMICOLON)
             return exp
 
     def parse_declare(self) -> Declare:
@@ -190,10 +268,12 @@ class Parser:
                 line=id.line, type="SyntaxError"
             )
         val = None
+        init = False
         if self.peek().type == TokenType.ASSIGNMENT:
+            init = True
             self.consume(TokenType.ASSIGNMENT)
             val = self.parse_assignment()
-        entry = SymbolEntry(id=id.value, type=_type.type, initialised=True, line=val.line)
+        entry = SymbolEntry(id=id.value, type=_type.type, initialised=init, line=id.line)
         variable = Var(id=id.value, type=_type.type, line=id.line)
         symbol.insert(id.value, entry)
         self.consume(TokenType.SEMICOLON)
@@ -238,10 +318,14 @@ class Parser:
             init = self.parse_declare()
         else:
             init = self.parse_exp_statement()
+            self.consume(TokenType.SEMICOLON)
         control = self.parse_exp_statement()
+        self.consume(TokenType.SEMICOLON)
         if not control.exp:
             control = ExpStatement(line=control.line, exp=IntLiteral(value=1, line=control.line))
         post_exp = self.parse_exp_statement()
+        self.consume(TokenType.CLOSE_PARENTHESIS)
+        
         if self.next_is_block():
             stm = self.parse_block()
         else:
@@ -254,9 +338,8 @@ class Parser:
     def parse_while(self) -> Statement:
         self.consume(TokenType.WHILE)
         self.consume(TokenType.OPEN_PARENTHESIS)
-        control = self.parse_exp_statement()
-        if not control.exp:
-            control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
+        control = self.parse_assignment()
+        self.consume(TokenType.CLOSE_PARENTHESIS)
         if self.next_is_block():
             stm = self.parse_block()
         else:
@@ -271,24 +354,18 @@ class Parser:
             stm = self.parse_statement()
         self.consume(TokenType.WHILE)
         self.consume(TokenType.OPEN_PARENTHESIS)
-        control = self.parse_exp_statement()
-        if not control.exp:
-            control = ExpStatement(exp=IntLiteral(value=1, line=control.line))
+        control = self.parse_assignment()
+        self.consume(TokenType.CLOSE_PARENTHESIS)
         return DoWhile(statement=stm, condition=control)
         
     def parse_exp_statement(self) -> Statement:
+        null_stm = self.peek()
         if self.peek().type == TokenType.SEMICOLON:
-            null_stm = self.consume(TokenType.SEMICOLON)
             return ExpStatement(line=null_stm.line)
         elif self.peek().type == TokenType.CLOSE_PARENTHESIS:
-            null_stm = self.consume(TokenType.CLOSE_PARENTHESIS)
             return ExpStatement(line=null_stm.line)
         else:
             exp = self.parse_assignment()
-            if self.peek().type == TokenType.CLOSE_PARENTHESIS:
-                self.consume(TokenType.CLOSE_PARENTHESIS)
-            else:
-                self.consume(TokenType.SEMICOLON)
             return ExpStatement(line=exp.line, exp=exp)
     
     def parse_comma_exp(self) -> Exp:
@@ -315,7 +392,7 @@ class Parser:
         self.pos -= 1
         var = self.consume(TokenType.ID)
 
-        if self.search_blocks(var.value) == None:
+        if self.search_blocks(var.value) == False:
             error.report(error_msg=f"Cannot assign a value to undeclared variable {var.value}", line=var.line, type="SyntaxError")
         
         symbol = self.table_stack[-1]
@@ -504,7 +581,6 @@ class Parser:
             if self.peek().type == TokenType.OPEN_PARENTHESIS:
                 return self.parse_func_call(tok)
 
-            symbol = self.table_stack[-1]
             if self.search_blocks(tok.value) == False:
                 error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
 
@@ -519,7 +595,7 @@ class Parser:
                 return Var(id=tok.value, line=tok.line)
 
     def parse_func_call(self, name: Token):
-        if name.value not in func_table:
+        if name.value not in global_table:
             error.report(error_msg=f"Cannot call undeclared function {name.value}", line=name.line, type="SyntaxError")
             error.display("Parsing")
         self.consume(TokenType.OPEN_PARENTHESIS)
@@ -530,8 +606,10 @@ class Parser:
             if self.peek().type == TokenType.COMMA:
                 self.consume(TokenType.COMMA)
 
-        func = func_table[name.value]   
-        if len(func.variables) != len(params):
+        func = global_table[name.value] 
+        if isinstance(func, GlobalEntry):
+            error.report(error_msg=f"'{func.id}' is not a function", line=name.line, type="SyntaxError")  
+        elif len(func.variables) != len(params):
             error.report(
                 error_msg=f"Incorrect parameter count in calling function {name.value}",
                 line=name.line, type="SyntanError"

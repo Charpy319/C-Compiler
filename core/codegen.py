@@ -47,19 +47,23 @@ class Memory:
         entry = table[id]
         entry.offset = self.offset
         return self.offset
-
+# TODO: write support for storing in different sizes
 class CodeGenerator:
     def __init__(self, root: Program):
         self.root = root
         self.memory = Memory()
         self.table_stack = []
 
-    def search_blocks(self, id: str, line: int = None) -> int:
+    def search_blocks(self, id: str, line: int = None):
         for i in range(-1, -len(self.table_stack) - 1, -1):
             symbol = self.table_stack[i]
             if id in symbol.table:
-                if line and line >= symbol.table[id].line:
+                if not line:    # For break, continue labels
                     return symbol.get(id)
+                elif line >= symbol.table[id].line:
+                    return (symbol.get(id), False)  # False for local
+            if id in global_table and isinstance(global_table[id], SymbolEntry):
+                return (global_table[id], True)   # True for global
         return None
 
     def padding(self, args) -> int:
@@ -67,18 +71,49 @@ class CodeGenerator:
             return 8
         else:
             return 0
-                   
+            
     def generate_program(self) -> str:
-        assembly = ".section __TEXT,__text\n"
-        for func in self.root.functions:
-            if isinstance(func, FunctionProto):
-                continue
-            assembly += self.generate_function(func)
+        assembly = ""
+        if self.root.init_vars:
+            assembly += "    .section __DATA,__data\n"
+            for init_var in self.root.init_vars:
+                assembly += self.generate_global_init(init_var)
+            assembly += "\n\n"
+        if self.root.uninit_vars:
+            for uninit_var in self.root.uninit_vars:
+                assembly += self.generate_global_uninit(uninit_var)
+            assembly += "\n\n"
+        if self.root.funcs:
+            assembly += (
+                "    .section __TEXT,__text\n"
+                
+            )
+            for func in self.root.funcs:
+                assembly += self.generate_function(func)
         return assembly
+    # TODO: cant generate code as cannot calculate during run time so need calculate with python, check later
+    def generate_global_init(self, gl_var: GlobalVar) -> str:
+        variable = gl_var.id
+        if not isinstance(gl_var.exp, IntLiteral):
+            error.report(
+                error_msg=f"Global variable '{variable.id}' can only contain constant expressions",
+                line=variable.line, type="SyntaxError"
+            ) 
+            error.display("Code Generation")
+        return (
+            f"    .globl    _{variable.id}\n"
+            "    .p2align    3\n"  # 2*2 = 4 for int, use 3 for simplicity right now
+            f"_{variable.id}:\n"
+            f"    .int    {gl_var.exp.value}\n"
+        )
+    
+    def generate_global_uninit(self, gl_var: GlobalVar) -> str:
+        variable = gl_var.id
+        return f"    .zerofill __DATA,__bss,_{variable.id},8,3\n"
 
     def generate_function(self, func: Function) -> str:
         return  (
-            f"    .globl   _{func.name}\n"
+            f"    .globl    _{func.name}\n"
             f"_{func.name}:\n" +
             "    pushq    %rbp\n"
             "    movq    %rsp, %rbp\n" +
@@ -93,18 +128,19 @@ class CodeGenerator:
         if memory != 0:
             assembly += f"    subq    ${memory}, %rsp\n"
         for itm in blk.block_items:
-            assembly += self.generate_statement(itm)
+            stm = self.generate_statement(itm)
+            if stm:
+                assembly += stm
         self.table_stack.pop()
         return assembly
         
     def generate_statement(self, stm: Statement) -> str:
-
         if isinstance(stm, Return):
             return (
                 self.generate_exp(stm.exp) +
                 "    movq    %rbp, %rsp\n"
                 "    popq    %rbp\n"
-                "    ret\n"
+                "    ret\n\n"
             )
             
         elif isinstance(stm, If):
@@ -129,22 +165,35 @@ class CodeGenerator:
                     self.generate_statement(stm.if_statement) +
                     f"_{end}:\n"
                 )
-        # TODO: Something wrong with declaring variables and break in loops not working, debug tomorrow
+    
         elif isinstance(stm, For):
+            assembly = ""
             if stm.symboltable:
                 symbol = stm.symboltable
                 self.table_stack.append(symbol)
+                memory = self.memory.make_space(symbol.table)
+                assembly += f"    subq    ${memory}, %rsp\n"
             else:
                 symbol = self.table_stack[-1]
-            assembly = (self.generate_statement(stm.initial) if stm.initial.exp else "")
+            assembly += (self.generate_statement(stm.initial) if stm.initial.exp else "")
             start = LabelGen.generate('start')
             end = LabelGen.generate('end')
             cont = LabelGen.generate('cont')
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=cont))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
             condition = self.generate_statement(stm.condition)
+            if not condition:
+                condition = ""
             post_exp = self.generate_statement(stm.post_exp)
+            if not post_exp:
+                post_exp = ""
             statement = self.generate_statement(stm.statement)
+            if not statement:
+                statement = ""
+            symbol.pop("_continue")
+            symbol.pop("_break")
+            if isinstance(stm.initial, Declare):
+                self.table_stack.pop()
             assembly += (
                 f"_{start}:\n" +
                 condition +
@@ -164,8 +213,14 @@ class CodeGenerator:
             symbol = self.table_stack[-1]
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=start))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
-            condition = self.generate_statement(stm.condition)
+            condition = self.generate_exp(stm.condition)
+            if not condition:
+                condition = ""
             statement = self.generate_statement(stm.statement)
+            if not statement:
+                statement = ""
+            symbol.pop("_continue")
+            symbol.pop("_break")
             return (
                 f"_{start}:" +
                 condition +
@@ -182,8 +237,14 @@ class CodeGenerator:
             symbol = self.table_stack[-1]
             symbol.insert(id="_continue", entry=LabelEntry(id="_continue", name=start))
             symbol.insert(id="_break", entry=LabelEntry(id="_break", name=end))
-            condition = self.generate_statement(stm.condition)
+            condition = self.generate_exp(stm.condition)
+            if not condition:
+                condition = ""
             statement = self.generate_statement(stm.statement)
+            if not statement:
+                statement = ""
+            symbol.pop("_continue")
+            symbol.pop("_break")
             return (
                 f"_{start}:" +
                 statement +
@@ -195,14 +256,14 @@ class CodeGenerator:
             )
         
         elif isinstance(stm, Break):
-            br = self.search_blocks("_break")
+            br = self.search_blocks(id="_break")
             if not br:
                 error.report(error_msg="Break can only be used in loops", line=stm.line, type="SyntaxError")
                 error.display("Code Generation")
             return f"    jmp    _{br.name}\n"
 
         elif isinstance(stm, Continue):
-            cn = self.search_blocks("_continue")
+            cn = self.search_blocks(id="_continue")
             if not cn:
                 error.report(error_msg="Continue can only be used in loops", line=stm.line, type="SyntaxError")
                 error.display("Code Generaton")
@@ -210,7 +271,7 @@ class CodeGenerator:
             
         elif isinstance(stm, ExpStatement):
             if not stm.exp:
-                return
+                return None
             else:
                 return self.generate_exp(stm.exp)
                 
@@ -219,10 +280,13 @@ class CodeGenerator:
             symbol = self.table_stack[-1]
             variable = stm.id
             offset = self.memory.assign_memory(variable.id, symbol.table, stm.line)
-            return (
-                (self.generate_exp(stm.exp) if stm.exp else "    movq    $0, %rax\n") +
-                f"    movq    %rax, {offset}(%rbp)\n"
-            )
+            if stm.exp:
+                return (
+                    self.generate_exp(stm.exp) +
+                    f"    movq    %rax, {offset}(%rbp)\n"
+                )
+            else:
+                return ""
         elif isinstance(stm, Block):
             return self.generate_block(stm)
         else:
@@ -234,11 +298,13 @@ class CodeGenerator:
             return f"{self.generate_exp(exp.lhs)}{self.generate_exp(exp.rhs)}"
         
         elif isinstance(exp, Assign):
-            var = self.search_blocks(exp.id.id, exp.line)
-            return (
-                self.generate_exp(exp.exp) +
-                f"    movq    %rax, {var.offset}(%rbp)\n"
-            )
+            var, _global = self.search_blocks(exp.id.id, exp.line)
+            assembly = self.generate_exp(exp.exp)
+            if _global:
+                assembly += f"    movq    %rax, _{var.id}(%rip)\n"
+            else:
+                assembly += f"    movq    %rax, {var.offset}(%rbp)\n"
+            return assembly
         
         elif isinstance(exp, Conditional):
             end = LabelGen.generate("end")
@@ -459,36 +525,66 @@ class CodeGenerator:
                 )
 
         elif isinstance(exp, Decrement):
-            var = self.search_blocks(exp.id, exp.line)
+            var, _global = self.search_blocks(exp.id, exp.line)
             if exp.prefix == True:
-                return (
-                    f"    movq    {var.offset}(%rbp), %rax\n"
-                    "    dec    %rax\n"
-                    f"    movq    %rax, {var.offser}(%rbp)\n"
-                )
-            elif exp.prefix == False:
-                return (
+                if _global:
+                    return (
+                        f"    movq    _{var.id}(%rip), %rax\n"
+                        "    dec    %rax\n"
+                        f"    movq    %rax, _{var.id}(%rip)\n"
+                    )
+                else:
+                    return (
+                        f"    movq    {var.offset}(%rbp), %rax\n"
+                        "    dec    %rax\n"
+                        f"    movq    %rax, {var.offset}(%rbp)\n"
+                    )
+            elif exp.prefix == False:   #Postfix increment
+                if _global:
+                    return (
+                        f"    movq    _{var.id}(%rip), %rax\n"
+                        "    movq    %rax, %rcx\n"
+                        "    dec    %rcx\n"
+                        f"    movq    %rcx, _{var.id}(%rip)\n"
+                    )
+                else:
+                    return (
                     f"    movq    {var.offset}(%rbp), %rax\n"
                     "    movq    %rax, %rcx\n"
                     "    dec    %rcx\n"
                     f"    movq    %rcx, {var.offset}(%rbp)\n"
-                )
+                    )
 
         elif isinstance(exp, Increment):
-            var = self.search_blocks(exp.id, exp.line)
+            var, _global = self.search_blocks(exp.id, exp.line)
             if exp.prefix == True:  #Prefix increment
-                return (
-                    f"    movq    {var.offset}(%rbp), %rax\n"
-                    "    inc    %rax\n"
-                    f"    movq    %rax, {var.offset}(%rbp)\n"
-                )
+                if _global:
+                    return (
+                        f"    movq    _{var.id}(%rip), %rax\n"
+                        "    inc    %rax\n"
+                        f"    movq    %rax, _{var.id}(%rip)\n"
+                    )
+                else:
+                    return (
+                        f"    movq    {var.offset}(%rbp), %rax\n"
+                        "    inc    %rax\n"
+                        f"    movq    %rax, {var.offset}(%rbp)\n"
+                    )
             elif exp.prefix == False:   #Postfix increment
-                return (
+                if _global:
+                    return (
+                        f"    movq    _{var.id}(%rip), %rax\n"
+                        "    movq    %rax, %rcx\n"
+                        "    inc    %rcx\n"
+                        f"    movq    %rcx, _{var.id}(%rip)\n"
+                    )
+                else:
+                    return (
                     f"    movq    {var.offset}(%rbp), %rax\n"
                     "    movq    %rax, %rcx\n"
                     "    inc    %rcx\n"
                     f"    movq    %rcx, {var.offset}(%rbp)\n"
-                )
+                    )
 
         elif isinstance(exp, UnOp):
             op = exp.operator
@@ -510,8 +606,11 @@ class CodeGenerator:
 
 
         elif isinstance(exp, Var):
-            var = self.search_blocks(exp.id, exp.line)
-            return f"    movq    {var.offset}(%rbp), %rax\n"
+            var, _global = self.search_blocks(exp.id, exp.line)
+            if _global:
+                return f"    movq    _{var.id}(%rip), %rax\n"
+            else:
+                return f"    movq    {var.offset}(%rbp), %rax\n"
 
         elif isinstance(exp, Parenthesis):
             return self.generate_exp(exp.exp)
@@ -537,4 +636,4 @@ class CodeGenerator:
             return assembly
 
         else:
-            error.report(error_msg=f"Incorrect use of {exp}", line=exp.line, type="Syntax")
+            error.report(error_msg=f"Incorrect use of {exp}", line=exp.line, type="SyntaxError")

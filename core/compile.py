@@ -1,5 +1,6 @@
 from .lexer import Lexer as lexer
 from .parser import Parser as parser
+from .fold import Fold as fold
 from .codegen import CodeGenerator as codegen
 from core.util.error import error
 
@@ -15,8 +16,11 @@ def compile(text):
     ast = parser(tokens).parse_program()
     error.display("Parsing")
 
+    print("...folding an optimizing...\n")
+    folded = fold(ast).start_fold()
+
     print("...and generating the assembly\n")
-    assembly = codegen(ast).generate_program()
+    assembly = codegen(folded).generate_program()
     error.display("Code generation")
 
     with open("main.s", "w") as file:

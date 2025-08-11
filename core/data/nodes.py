@@ -7,20 +7,25 @@ from core.data.token_types import TokenType
 
 @dataclass
 class Program:
-    functions: list('Function')
+    init_vars: list('GlobalVar')
+    uninit_vars: list('GlobalVar')
+    funcs: list('Function')
 
 @dataclass
-class FunctionProto:
-    name: str
-    variables: list((TokenType, str))
-    _return: TokenType
+class GlobalVar:
+    id: 'Var'
+    type: TokenType
+    exp: 'ExpStatement'
+    line: int
+    init: bool
 
 @dataclass
 class Function:
     name: str
     variables: list((TokenType, str))
     _return: TokenType
-    body: 'Block'
+    prototype: bool
+    body: Optional['Block'] = None
 
 @dataclass
 class Block:
@@ -55,13 +60,13 @@ class For:
 
 @dataclass
 class While:
-    condition: 'ExpStatement'
+    condition: 'Exp'
     statement: 'Statement'
 
 @dataclass
 class DoWhile:
     statement: 'Statement'
-    condition: 'ExpStatement'
+    condition: 'Exp'
 
 @dataclass
 class Break:
@@ -223,3 +228,5 @@ Exp = Union[
 Statement = Union[Return, Declare, Exp, Block, ExpStatement, If, For, While, DoWhile, Break, Continue]
 
 BlockItem = Union[Statement, Declare]
+
+Top = Union[GlobalVar, Function]

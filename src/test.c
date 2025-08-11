@@ -1,6 +1,7 @@
+int foo;
+
 int main() {
-    for (int i = 0; i < 10; i++){
-        continue;
-    }
-    return 0;
+    return foo;
 }
+
+int foo = 3;

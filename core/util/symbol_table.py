@@ -9,6 +9,11 @@ class SymbolEntry:
         self.line = line
         self.offset = offset
 
+class GlobalEntry(SymbolEntry):
+    def __init__(self, id: str, type: TokenType, initialised: bool, line: int):
+        super().__init__(id, type, initialised, line)
+        self.exp = None
+
 class LabelEntry:
     def __init__(self, id: str, name: str):
         self.id = id
@@ -20,8 +25,12 @@ class SymbolTable:
 
     def insert(self, id: str, entry: SymbolEntry):
         self.table[id] = entry
+    
+    def pop(self, id: str):
+        return self.table.pop(id)
+        
 
     def get(self, id: str) -> SymbolEntry:
         return self.table[id]
 
-func_table = {}
+global_table = {}
