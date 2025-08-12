@@ -44,20 +44,22 @@ class Parser:
         while -i <= len(self.table_stack):
             symbol = self.table_stack[i]
             if id in symbol.table:
-                return True
+                return symbol.get(id)
             else:
                 i -= 1
         if id in global_table and isinstance(global_table[id], GlobalEntry):
-            return True
-        return False
+            return global_table[id]
+        return None
 
     def next_is_block(self):
         return self.peek().type == TokenType.OPEN_BRACE
 
-    def remove_declare(self, decl_set, inits):
-        for i in inits:
-            if i.id.id in decl_set:
-                decl
+    def remove_declare(self, init_set, uninits):
+        trimmed = []
+        for u in uninits:
+            if u.id.id not in init_set:
+                trimmed.append(u)
+        return trimmed
     # TODO: remove uninits
     
     # Builds AST from the program node down
@@ -65,18 +67,18 @@ class Parser:
         inits = []
         uninits = []
         funcs = []
-        decl_set = set()
+        init_set = set()
         while self.pos < len(self.tokens):
             top = self.parse_global()
             if isinstance(top, Function):
                 funcs.append(top)
             elif isinstance(top, GlobalVar):
                 if top.init:
-                    decl_set.add(top.id.id)
+                    init_set.add(top.id.id)
                     inits.append(top)
                 else:
                     uninits.append(top)
-            uninits = self.remove_declare(decl_set, inits)
+            uninits = self.remove_declare(init_set, uninits)
         return Program(init_vars=inits, uninit_vars=uninits, funcs=funcs)
 
     def parse_global(self) -> Top:
@@ -98,7 +100,7 @@ class Parser:
             self.consume(TokenType.ASSIGNMENT)
             val = self.parse_assignment()
         entry = GlobalEntry(id=id.value, type=_type.type, initialised=init, line=id.line)
-        variable = Var(id=id.value, type=_type.type, line=id.line)
+        variable = Var(id=id.value, line=id.line, type=_type.type)
 
         if id.value in global_table:
             if not isinstance(global_table[id.value], GlobalEntry):
@@ -392,7 +394,7 @@ class Parser:
         self.pos -= 1
         var = self.consume(TokenType.ID)
 
-        if self.search_blocks(var.value) == False:
+        if not self.search_blocks(var.value):
             error.report(error_msg=f"Cannot assign a value to undeclared variable {var.value}", line=var.line, type="SyntaxError")
         
         symbol = self.table_stack[-1]
@@ -401,7 +403,8 @@ class Parser:
                 error_msg=f"Cannot perform operation {self.peek().type.name} on uninitialised variable {var.value}",
                 line=var.line, type="SyntaxError"
                 )
-
+        declared = symbol.get(var.value)
+        _type = declared.type
         operation = self.consume(
             TokenType.ASSIGNMENT, TokenType.ASSIGN_ADD, TokenType.ASSIGN_SUB, 
             TokenType.ASSIGN_MULT, TokenType.ASSIGN_DIV, TokenType.ASSIGN_MOD,
@@ -415,7 +418,7 @@ class Parser:
         else:
             assign = self.parse_conditional()
 
-        variable = Var(id=var.value, line=var.line)
+        variable = Var(id=var.value, line=var.line, type=_type)
 
         if operation.type == TokenType.ASSIGN_ADD:
             assign = AddSub(operator=TokenType.ADDITION, operand1=variable, operand2=assign, line=var.line)
@@ -438,7 +441,7 @@ class Parser:
         elif operation.type == TokenType.ASSIGN_LEFT_SHIFT:
             assign = BitShift(operator=TokenType.BIT_SHIFT_LEFT, operand1=variable, operand2=assign, line=var.line)
 
-        return Assign(id=variable, exp=assign, line=var.line)
+        return Assign(id=variable, exp=assign, line=var.line, type=_type)
 
     def parse_conditional(self) -> Exp:
         cond = self.parse_or()
@@ -567,32 +570,32 @@ class Parser:
 
         elif tok.type == TokenType.INCREMENT or tok.type == TokenType.DECREMENT:
             id = self.consume(TokenType.ID)
-            symbol = self.table_stack[-1]
-            if tok.value not in symbol.table:
+            declared = self.search_blocks(tok.value)
+            if not declared:
                 error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
-
+            _type = declared.type 
             if tok.type == TokenType.INCREMENT:
-                return Increment(id=id.value, prefix=True, line=tok.line)
+                return Increment(id=id.value, prefix=True, line=tok.line, type=_type)
             elif tok.type == TokenType.DECREMENT:
-                return Decrement(id=id.value, prefix=True, line=tok.line)
+                return Decrement(id=id.value, prefix=True, line=tok.line, type=_type)
 
         
         elif tok.type == TokenType.ID:
             if self.peek().type == TokenType.OPEN_PARENTHESIS:
                 return self.parse_func_call(tok)
-
-            if self.search_blocks(tok.value) == False:
+            declared = self.search_blocks(tok.value)
+            if not declared:
                 error.report(error_msg=f"Variable {tok.value} not declared at this scope", line=tok.line, type="SyntaxError")
-
+            _type = declared.type
             if self.peek().type == TokenType.INCREMENT:
                 self.consume(TokenType.INCREMENT)
-                return Increment(id=tok.value, prefix=False, line=tok.line)
+                return Increment(id=tok.value, prefix=False, line=tok.line, type=_type)
             elif self.peek().type == TokenType.DECREMENT:
                 self.consume(TokenType.DECREMENT)
-                return Decrement(id=tok.value, prefix=False, line=tok.line)
+                return Decrement(id=tok.value, prefix=False, line=tok.line, type=_type)
                 
             else:
-                return Var(id=tok.value, line=tok.line)
+                return Var(id=tok.value, line=tok.line, type=_type)
 
     def parse_func_call(self, name: Token):
         if name.value not in global_table:

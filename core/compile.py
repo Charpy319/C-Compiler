@@ -30,10 +30,10 @@ def compile(text):
 
     result = subprocess.run(["./main"])
 
-    """if os.path.exists("main.s"):
+    if os.path.exists("main.s"):
         os.remove("main.s")
 
     if os.path.exists("main"):
-        os.remove("main")"""
+        os.remove("main")
 
     return f"Program exited with: {result.returncode}"

@@ -92,7 +92,7 @@ class Assign:
     id: 'Var'
     exp: 'Exp'
     line: int
-    type: Optional[TokenType] = None
+    type: TokenType
 
 @dataclass 
 class Conditional:
@@ -188,18 +188,20 @@ class Decrement:
     id: str
     prefix: bool
     line: int
+    type: TokenType
 
 @dataclass
 class Increment:
     id: str
     prefix: bool
     line: int
+    type: TokenType
 
 @dataclass
 class Var:
     id: str
     line: int
-    type: Optional[TokenType] = None
+    type: TokenType
 
 @dataclass
 class FunctionCall:

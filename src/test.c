@@ -1,7 +1,6 @@
-int foo;
+int a = 3;
+int b = 4;
 
 int main() {
-    return foo;
+    return a * b;
 }
-
-int foo = 3;
